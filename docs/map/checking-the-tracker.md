@@ -16,6 +16,8 @@ How `gltree check` reads every item and reports where the tracker breaks the con
   reported once per pair, at the lower number.
 - `cycle` follows parents up from each item, so an item whose ancestors loop is reported along
   with the loop's members — as the Python tool does.
+- `check` hands every item, with whether it is a root and all its descendants, to the state
+  policy, which alone decides; a future policy that judges non-roots needs nothing from `check`.
 - State policy `roots-only`: only an item with no parent at all is judged — a root closed with an
   open descendant, or open with every descendant closed. An item under a missing parent is not a
   root. Descendants are walked to any depth.
