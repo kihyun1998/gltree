@@ -63,6 +63,21 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Give an item a new parent, or make it a root, keeping its Parent line and links in step
+    Move {
+        /// The item to move, as `N` or `#N`
+        #[arg(value_parser = parse_iid)]
+        item: u64,
+        /// The new parent, as `N` or `#N`
+        #[arg(long, value_parser = parse_iid, conflicts_with = "to_root", required_unless_present = "to_root")]
+        to: Option<u64>,
+        /// Make the item a root
+        #[arg(long)]
+        to_root: bool,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
     /// Save every item of the tracker, with its links, to a file
     Snapshot {
         /// The file to write
@@ -182,6 +197,37 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 match made.link {
                     Some((p, c)) => writeln!(out, "#{c} under #{p}: {}", made.created.url)?,
                     None => writeln!(out, "#{} (a root): {}", made.created.iid, made.created.url)?,
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Move {
+            item,
+            to,
+            to_root: _,
+            json,
+        } => {
+            write::require_opt_in(config.present)?;
+            let m = write::move_item(&server()?, config.present, item, to)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&write::moved_json(&m))?
+                )?;
+            } else {
+                let name =
+                    |p: Option<u64>| p.map_or("a root".to_string(), |p| format!("under #{p}"));
+                if m.changed {
+                    writeln!(
+                        out,
+                        "#{} moved from {} to {}",
+                        m.iid,
+                        name(m.from),
+                        name(m.to)
+                    )?;
+                } else {
+                    writeln!(out, "#{} is already {}; nothing written", m.iid, name(m.to))?;
                 }
             }
             Ok(ExitCode::SUCCESS)

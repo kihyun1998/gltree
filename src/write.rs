@@ -99,6 +99,114 @@ pub fn new_json(n: &New) -> Value {
     })
 }
 
+/// A move: the item, its parent before and after, and whether anything was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    pub iid: u64,
+    pub from: Option<u64>,
+    pub to: Option<u64>,
+    pub changed: bool,
+}
+
+/// `desc` with its parent set to `to`: the first line replaced or a Parent line and blank line
+/// added; for `None`, the Parent line and the one blank line under it removed.
+pub fn body_moved(desc: &str, to: Option<u64>) -> String {
+    if ParentLine::parse(desc).is_none() {
+        return match to {
+            Some(_) => body_with_parent(to, desc),
+            None => desc.into(),
+        };
+    }
+    let (first, rest) = match desc.find('\n') {
+        Some(i) => (&desc[..i], &desc[i..]),
+        None => (desc, ""),
+    };
+    match to {
+        Some(p) => {
+            let cr = if first.ends_with('\r') { "\r" } else { "" };
+            format!("Parent: #{p}{cr}{rest}")
+        }
+        None => {
+            let rest = rest.strip_prefix('\n').unwrap_or(rest);
+            let rest = rest
+                .strip_prefix("\r\n")
+                .or_else(|| rest.strip_prefix('\n'))
+                .unwrap_or(rest);
+            rest.into()
+        }
+    }
+}
+
+/// Gives `n` the parent `to`, or makes it a root for `None`: the body first, then the new link,
+/// then the old link removed. Refuses before any write a repo that has not opted in, a missing
+/// item or parent, and a parent that is `n` or below it.
+pub fn move_item(
+    tracker: &dyn Tracker,
+    opted_in: bool,
+    n: u64,
+    to: Option<u64>,
+) -> Result<Moved, Error> {
+    require_opt_in(opted_in)?;
+    let item = tracker
+        .level(&[n])?
+        .remove(&n)
+        .ok_or(Error::NotFound(n))?
+        .item;
+    let from = ParentLine::parse(&item.desc);
+    if from == to {
+        return Ok(Moved {
+            iid: n,
+            from,
+            to,
+            changed: false,
+        });
+    }
+    if let Some(p) = to {
+        let below = crate::tree::subtree(tracker, &ParentLine, n)?;
+        if below.iter().any(|it| it.iid == p) {
+            return Err(Error::Refused(format!(
+                "#{p} is #{n} or below it; moving #{n} there would make a cycle"
+            )));
+        }
+        if !tracker.level(&[p])?.contains_key(&p) {
+            return Err(Error::NotFound(p));
+        }
+    }
+    let mut left = Vec::new();
+    if let Some(p) = to {
+        left.push(format!("link #{p} and #{n}"));
+    }
+    if let Some(f) = from {
+        left.push(format!("unlink #{f} and #{n}"));
+    }
+    tracker.set_desc(n, &body_moved(&item.desc, to))?;
+    let unfinished = |done: usize, e: Error| {
+        Error::Unfinished(format!(
+            "#{n}'s Parent line now names {}, but a link step failed ({e}); left to do: {}",
+            to.map_or("no parent".into(), |p| format!("#{p}")),
+            left[done..].join(", then ")
+        ))
+    };
+    let mut done = 0;
+    if let Some(p) = to {
+        tracker.add_link(p, n).map_err(|e| unfinished(done, e))?;
+        done += 1;
+    }
+    if let Some(f) = from {
+        tracker.remove_link(f, n).map_err(|e| unfinished(done, e))?;
+    }
+    Ok(Moved {
+        iid: n,
+        from,
+        to,
+        changed: true,
+    })
+}
+
+pub fn moved_json(m: &Moved) -> Value {
+    json!({ "version": JSON_VERSION, "item": m.iid, "from": m.from, "to": m.to, "changed": m.changed })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +323,163 @@ mod tests {
         assert!(
             m.contains("#2") && m.contains("#1") && m.contains("link"),
             "{m}"
+        );
+    }
+
+    fn tree3() -> FakeTracker {
+        // 1 ─ 2 ─ 3, and 4 a lone root; every parent and child linked
+        let mut items = vec![
+            Item::new(1, State::Open, "t1", ""),
+            Item::new(
+                2,
+                State::Open,
+                "t2",
+                "Parent: #1\n\nBlocked by: #4\nNIT: skipped\nbody",
+            ),
+            Item::new(3, State::Open, "t3", "Parent: #2"),
+            Item::new(4, State::Open, "t4", "lone"),
+        ];
+        let links = [vec![2], vec![1, 3], vec![2], vec![]];
+        for (it, l) in items.iter_mut().zip(links) {
+            it.links = Some(l);
+        }
+        FakeTracker::new(items)
+    }
+
+    fn clean(t: &FakeTracker) -> Vec<crate::check::Finding> {
+        crate::check::check(
+            &t.all_items().unwrap(),
+            &ParentLine,
+            &crate::check::RootsOnly,
+            crate::check::Links::TreeOnly,
+        )
+    }
+
+    #[test]
+    fn a_child_moves_to_a_new_parent_body_first_then_new_link_then_old_unlinked() {
+        let t = tree3();
+        let m = move_item(&t, true, 2, Some(4)).unwrap();
+        assert_eq!((m.from, m.to, m.changed), (Some(1), Some(4), true));
+        let writes: Vec<String> = t.writes.borrow().clone();
+        assert_eq!(writes, ["desc #2", "link #4 #2", "unlink #1 #2"]);
+        assert_eq!(
+            t.item(2).unwrap().desc,
+            "Parent: #4\n\nBlocked by: #4\nNIT: skipped\nbody"
+        );
+        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+    }
+
+    #[test]
+    fn a_root_moves_under_a_parent_with_the_line_new_writes() {
+        let t = tree3();
+        move_item(&t, true, 4, Some(3)).unwrap();
+        assert_eq!(t.item(4).unwrap().desc, "Parent: #3\n\nlone");
+        assert_eq!(*t.writes.borrow(), ["desc #4", "link #3 #4"]);
+        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+    }
+
+    #[test]
+    fn to_root_drops_the_line_and_its_blank_line_and_the_old_link_only() {
+        let t = tree3();
+        let m = move_item(&t, true, 2, None).unwrap();
+        assert_eq!((m.from, m.to), (Some(1), None));
+        assert_eq!(
+            t.item(2).unwrap().desc,
+            "Blocked by: #4\nNIT: skipped\nbody"
+        );
+        assert_eq!(*t.writes.borrow(), ["desc #2", "unlink #1 #2"]);
+        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+    }
+
+    #[test]
+    fn new_then_to_root_gives_back_the_text() {
+        let t = tree3();
+        let text = "first\r\n\r\nsecond";
+        let made = new_item(&t, true, Some(1), "x", text, &[]).unwrap();
+        move_item(&t, true, made.created.iid, None).unwrap();
+        assert_eq!(t.item(made.created.iid).unwrap().desc, text);
+    }
+
+    #[test]
+    fn a_crlf_first_line_keeps_its_line_ending() {
+        assert_eq!(
+            body_moved("Parent: #1\r\n\r\nx", Some(4)),
+            "Parent: #4\r\n\r\nx"
+        );
+        assert_eq!(body_moved("Parent: #1\r\n\r\nx", None), "x");
+        assert_eq!(body_moved("Parent: #1", None), "");
+        assert_eq!(body_moved("Parent: #1\nx", None), "x");
+    }
+
+    #[test]
+    fn a_parent_that_is_the_item_or_below_it_is_refused_before_any_write() {
+        let t = tree3();
+        assert!(
+            matches!(move_item(&t, true, 1, Some(1)), Err(Error::Refused(m)) if m.contains("cycle"))
+        );
+        assert!(
+            matches!(move_item(&t, true, 1, Some(3)), Err(Error::Refused(m)) if m.contains("cycle"))
+        );
+        assert!(t.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_rerun_changes_nothing() {
+        let t = tree3();
+        let m = move_item(&t, true, 2, Some(1)).unwrap();
+        assert!(!m.changed);
+        let m = move_item(&t, true, 4, None).unwrap();
+        assert!(!m.changed);
+        assert!(t.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_missing_item_or_parent_and_a_repo_without_config_are_refused_before_any_write() {
+        let t = tree3();
+        assert!(matches!(
+            move_item(&t, true, 99, Some(1)),
+            Err(Error::NotFound(99))
+        ));
+        assert!(matches!(
+            move_item(&t, true, 2, Some(99)),
+            Err(Error::NotFound(99))
+        ));
+        assert!(matches!(
+            move_item(&t, false, 2, Some(4)),
+            Err(Error::Refused(_))
+        ));
+        assert!(t.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failure_after_the_body_was_written_says_what_is_left() {
+        let t = tree3();
+        t.fail_links.set(true);
+        let e = move_item(&t, true, 2, Some(4)).unwrap_err();
+        let m = e.to_string();
+        assert!(matches!(e, Error::Unfinished(_)), "{m}");
+        assert!(m.contains("link #4 and #2") && m.contains("#1"), "{m}");
+    }
+
+    #[test]
+    fn when_only_the_old_link_failed_only_the_unlink_is_left() {
+        let t = tree3();
+        t.fail_unlinks.set(true);
+        let m = move_item(&t, true, 2, Some(4)).unwrap_err().to_string();
+        assert!(m.ends_with("left to do: unlink #1 and #2"), "{m}");
+    }
+
+    #[test]
+    fn json_reports_the_move() {
+        let m = Moved {
+            iid: 2,
+            from: Some(1),
+            to: None,
+            changed: true,
+        };
+        assert_eq!(
+            moved_json(&m),
+            json!({ "version": 1, "item": 2, "from": 1, "to": null, "changed": true })
         );
     }
 

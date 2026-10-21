@@ -222,3 +222,40 @@ fn new_refuses_a_body_file_that_is_not_utf8() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("UTF-8"));
 }
+
+#[test]
+fn move_needs_exactly_one_of_to_and_to_root() {
+    for args in [
+        vec!["move", "2"],
+        vec!["move", "2", "--to", "1", "--to-root"],
+    ] {
+        let out = gltree(&args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn move_in_a_repo_without_a_repo_config_is_refused_before_reaching_the_server() {
+    let dir = std::env::temp_dir().join("gltree-move-no-config");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args(["move", "2", "--to-root"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(".gltree.toml") && !err.contains("origin"),
+        "{err}"
+    );
+}

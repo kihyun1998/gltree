@@ -42,6 +42,14 @@ impl Tracker for SnapshotFile {
     fn add_link(&self, _: u64, _: u64) -> Result<(), Error> {
         Err(Error::Refused("a snapshot is read only".into()))
     }
+
+    fn set_desc(&self, _: u64, _: &str) -> Result<(), Error> {
+        Err(Error::Refused("a snapshot is read only".into()))
+    }
+
+    fn remove_link(&self, _: u64, _: u64) -> Result<(), Error> {
+        Err(Error::Refused("a snapshot is read only".into()))
+    }
 }
 
 #[cfg(test)]

@@ -74,6 +74,17 @@ or when `body.md` already opens with a `Parent:` line. If the issue is created b
 it names the issue and the link left to add, and exits 2. `--json` prints
 `{"version": 1, "created": {number, url}, "link": {parent, child} | null}`.
 
+## Move
+
+```sh
+gltree move 19 --to 12      # #19's Parent line becomes `Parent: #12`; its old parent is unlinked, #12 linked
+gltree move 19 --to-root    # the Parent line (and the blank line under it) and the old link go
+```
+
+Every other line of the body stays byte for byte. It refuses a target that is #19 or below it,
+and says so and writes nothing when #19 already has that parent. Like `new`, it writes only in a
+repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`.
+
 ## Repo config
 
 A consuming repo commits `.gltree.toml` at its root; every key is optional:

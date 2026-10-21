@@ -56,16 +56,20 @@ pub trait Tracker {
     fn create_item(&self, title: &str, desc: &str, labels: &[String]) -> Result<Created, Error>;
     /// A `relates_to` link between two items; an existing one is success.
     fn add_link(&self, a: u64, b: u64) -> Result<(), Error>;
+    fn set_desc(&self, iid: u64, desc: &str) -> Result<(), Error>;
+    /// Removes the link between two items; no link there is success.
+    fn remove_link(&self, a: u64, b: u64) -> Result<(), Error>;
 }
 
 /// An in-memory tracker for tests and for callers that already hold the items.
 /// Its links are each item's `links`; `levels` records every `level` call and `writes` every
-/// write, as text; `fail_links` makes `add_link` fail.
+/// write, as text; `fail_links` makes `add_link` fail and `fail_unlinks` `remove_link`.
 pub struct FakeTracker {
     pub items: RefCell<Vec<Item>>,
     pub levels: RefCell<Vec<Vec<u64>>>,
     pub writes: RefCell<Vec<String>>,
     pub fail_links: Cell<bool>,
+    pub fail_unlinks: Cell<bool>,
 }
 
 impl FakeTracker {
@@ -75,6 +79,7 @@ impl FakeTracker {
             levels: RefCell::new(vec![]),
             writes: RefCell::new(vec![]),
             fail_links: Cell::new(false),
+            fail_unlinks: Cell::new(false),
         }
     }
 
@@ -129,6 +134,37 @@ impl Tracker for FakeTracker {
             }
         }
         self.writes.borrow_mut().push(format!("link #{a} #{b}"));
+        Ok(())
+    }
+
+    fn set_desc(&self, iid: u64, desc: &str) -> Result<(), Error> {
+        let mut items = self.items.borrow_mut();
+        let it = items
+            .iter_mut()
+            .find(|it| it.iid == iid)
+            .ok_or(Error::NotFound(iid))?;
+        it.desc = desc.into();
+        self.writes.borrow_mut().push(format!("desc #{iid}"));
+        Ok(())
+    }
+
+    fn remove_link(&self, a: u64, b: u64) -> Result<(), Error> {
+        if self.fail_unlinks.get() {
+            return Err(Error::Server("unlink refused".into()));
+        }
+        for it in self.items.borrow_mut().iter_mut() {
+            let other = if it.iid == a {
+                b
+            } else if it.iid == b {
+                a
+            } else {
+                continue;
+            };
+            if let Some(links) = it.links.as_mut() {
+                links.retain(|l| *l != other);
+            }
+        }
+        self.writes.borrow_mut().push(format!("unlink #{a} #{b}"));
         Ok(())
     }
 }

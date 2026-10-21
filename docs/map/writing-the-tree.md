@@ -17,6 +17,15 @@ the tracker port, `create_item` / `add_link` in `src/gitlab.rs`).
 - Writes are REST under `api/v4/projects/<url-encoded path>`: `POST issues`, then
   `POST issues/<P>/links` with `link_type=relates_to`; 409 (already linked) counts as success.
   A create is judged by its status, never by whether the body carries an `iid`.
+- `move` reads the item (one `level`), and does nothing when it already has the target parent.
+  It refuses, before any write, a parent that is the item or below it — found by walking the
+  item's subtree along links, so an unlinked descendant would slip past (`check` reports those) —
+  and a parent that does not exist. Then: the body first (the truth), the new link, the old link
+  removed. A failure after the body names only the steps still left.
+- The body: a child's first line is replaced, keeping its CR if it had one; a root gains
+  `Parent: #P` and a blank line, as `new` writes it; `--to-root` drops the Parent line and the one
+  blank line under it, so `new` then `move --to-root` gives the text back.
+- `remove_link` finds the link's id in the item's links answer and deletes it; no link is success.
 
 ## Traps
 

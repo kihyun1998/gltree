@@ -51,29 +51,52 @@ impl GitLab {
 
     fn graphql(&self, query: &str) -> Result<Value, Error> {
         let url = format!("{}/api/graphql", self.login.api_base);
-        let (status, bytes) = self.post(&url, &json!({ "query": query }))?;
+        let (status, bytes) = self.call(Method::Post, &url, Some(&json!({ "query": query })))?;
         answer(status, &bytes)
     }
 
     /// A REST call under this project, e.g. `issues`; the status and the body.
-    fn rest(&self, path: &str, body: &Value) -> Result<(u16, Vec<u8>), Error> {
+    fn rest(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<(u16, Vec<u8>), Error> {
         let url = format!(
             "{}/api/v4/projects/{}/{path}",
             self.login.api_base,
             encode_path(&self.project)
         );
-        self.post(&url, body)
+        self.call(method, &url, body)
     }
 
-    fn post(&self, url: &str, body: &Value) -> Result<(u16, Vec<u8>), Error> {
-        let body = serde_json::to_vec(body).expect("a JSON value serialises");
-        let mut resp = self
-            .agent
-            .post(url)
-            .header("Authorization", &format!("Bearer {}", self.login.token))
-            .header("Content-Type", "application/json")
-            .send(&body[..])
-            .map_err(|e| Error::Source(format!("{url}: {e}")))?;
+    fn call(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<(u16, Vec<u8>), Error> {
+        let auth = format!("Bearer {}", self.login.token);
+        let json = body
+            .map(|b| serde_json::to_vec(b).expect("a JSON value serialises"))
+            .unwrap_or_default();
+        let sent = match method {
+            Method::Get => self.agent.get(url).header("Authorization", &auth).call(),
+            Method::Delete => self.agent.delete(url).header("Authorization", &auth).call(),
+            Method::Post => self
+                .agent
+                .post(url)
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .send(&json[..]),
+            Method::Put => self
+                .agent
+                .put(url)
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .send(&json[..]),
+        };
+        let mut resp = sent.map_err(|e| Error::Source(format!("{url}: {e}")))?;
         let status = resp.status().as_u16();
         let bytes = resp
             .body_mut()
@@ -111,15 +134,55 @@ impl Tracker for GitLab {
 
     fn create_item(&self, title: &str, desc: &str, labels: &[String]) -> Result<Created, Error> {
         let body = json!({ "title": title, "description": desc, "labels": labels.join(",") });
-        let (status, bytes) = self.rest("issues", &body)?;
+        let (status, bytes) = self.rest(Method::Post, "issues", Some(&body))?;
         created(status, &bytes)
     }
 
     fn add_link(&self, a: u64, b: u64) -> Result<(), Error> {
         let body = json!({ "target_project_id": self.project, "target_issue_iid": b, "link_type": "relates_to" });
-        let (status, bytes) = self.rest(&format!("issues/{a}/links"), &body)?;
+        let (status, bytes) = self.rest(Method::Post, &format!("issues/{a}/links"), Some(&body))?;
         linked(status, &bytes)
     }
+
+    fn set_desc(&self, iid: u64, desc: &str) -> Result<(), Error> {
+        let (status, bytes) = self.rest(
+            Method::Put,
+            &format!("issues/{iid}"),
+            Some(&json!({ "description": desc })),
+        )?;
+        created(status, &bytes).map(|_| ())
+    }
+
+    fn remove_link(&self, a: u64, b: u64) -> Result<(), Error> {
+        let (status, bytes) = self.rest(Method::Get, &format!("issues/{a}/links"), None)?;
+        let Some(id) = link_id(status, &bytes, b)? else {
+            return Ok(());
+        };
+        let (status, bytes) = self.rest(Method::Delete, &format!("issues/{a}/links/{id}"), None)?;
+        linked(status, &bytes)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Method {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+/// The id of the link from an item to `other`, from its links answer; `None` when there is none.
+pub fn link_id(status: u16, body: &[u8], other: u64) -> Result<Option<u64>, Error> {
+    if !(200..300).contains(&status) {
+        return Err(Error::Server(format!("HTTP {status} reading links")));
+    }
+    let v: Value =
+        serde_json::from_slice(body).map_err(|e| Error::Server(format!("a links answer: {e}")))?;
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .find(|l| l["iid"].as_u64() == Some(other))
+        .and_then(|l| l["issue_link_id"].as_u64()))
 }
 
 /// A project path as one URL segment: `group/app` → `group%2Fapp`.
@@ -427,6 +490,14 @@ mod tests {
             matches!(created(400, refused_with_iid), Err(Error::Server(m)) if m.starts_with("HTTP 400"))
         );
         assert!(created(201, b"{}").is_err());
+    }
+
+    #[test]
+    fn the_link_to_an_item_is_found_by_its_number() {
+        let body = br#"[{"iid": 7, "issue_link_id": 31}, {"iid": 9, "issue_link_id": 32}]"#;
+        assert_eq!(link_id(200, body, 9).unwrap(), Some(32));
+        assert_eq!(link_id(200, body, 8).unwrap(), None);
+        assert!(link_id(404, b"{}", 9).is_err());
     }
 
     #[test]
