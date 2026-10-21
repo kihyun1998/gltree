@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Byte-compared against the binary's output on every platform
+tests/golden/** text eol=lf
+tests/fixtures/** text eol=lf

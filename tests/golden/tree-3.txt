@@ -1,0 +1,3 @@
+#3 [closed] The editor wears its own font  1/2
+  #5 [open] The font can be put back
+  #6 [closed] A large font keeps its labels apart

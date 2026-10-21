@@ -1,0 +1,9 @@
+#1 [open] A settings drawer asks every value again  3/6
+  #2 [closed] Rows are drawn from one list  0/1
+    #11 [open] Trailing space on the line
+  #3 [closed] The editor wears its own font  1/2
+    #5 [open] The font can be put back
+    #6 [closed] A large font keeps its labels apart
+  #4 [open] 설정 「외관」 탭이 열린다
+#7 [closed] A lone piece of work
+#8 [open] Its parent was deleted

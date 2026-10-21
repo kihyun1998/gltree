@@ -1,0 +1,13 @@
+[
+ {"iid": 1, "gid": "gid://gitlab/WorkItem/1", "title": "A settings drawer asks every value again", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "", "labels": ["SPEC"], "links": [2, 3, 4], "created": "2026-01-02"},
+ {"iid": 2, "gid": "gid://gitlab/WorkItem/2", "title": "Rows are drawn from one list", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #1\n\nBody.", "labels": ["feature"], "links": [1], "created": "2026-01-02"},
+ {"iid": 3, "gid": "gid://gitlab/WorkItem/3", "title": "The editor wears its own font", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #1\r\n\r\nNIT: skipped\r\nBody.", "labels": [], "links": [1, 5, 6], "created": "2026-01-03"},
+ {"iid": 4, "gid": "gid://gitlab/WorkItem/4", "title": "설정 「외관」 탭이 열린다", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #1\n\nBlocked by: #2", "labels": [], "links": [1], "created": "2026-01-04"},
+ {"iid": 5, "gid": "gid://gitlab/WorkItem/5", "title": "The font can be put back", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #3", "labels": [], "links": [3], "created": "2026-01-05"},
+ {"iid": 6, "gid": "gid://gitlab/WorkItem/6", "title": "A large font keeps its labels apart", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #3\n\nParent: #1 is quoted here, not a parent line", "labels": [], "links": [3], "created": "2026-01-05"},
+ {"iid": 7, "gid": "gid://gitlab/WorkItem/7", "title": "A lone piece of work", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "Mentions Parent: #1 on its first line but not at the start", "labels": [], "links": [], "created": "2026-01-06"},
+ {"iid": 8, "gid": "gid://gitlab/WorkItem/8", "title": "Its parent was deleted", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #99", "labels": [], "links": [], "created": "2026-01-06"},
+ {"iid": 9, "gid": "gid://gitlab/WorkItem/9", "title": "Half of a loop", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #10", "labels": [], "links": [10], "created": "2026-01-07"},
+ {"iid": 10, "gid": "gid://gitlab/WorkItem/10", "title": "The other half", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #9", "labels": [], "links": [9], "created": "2026-01-07"},
+ {"iid": 11, "gid": "gid://gitlab/WorkItem/11", "title": "Trailing space on the line", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "Parent: #2  \nBody", "labels": [], "links": [2], "created": "2026-01-08"}
+]
