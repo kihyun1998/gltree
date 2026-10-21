@@ -88,3 +88,28 @@ fn an_unknown_root_or_a_missing_snapshot_exits_2_with_a_message() {
         );
     }
 }
+
+#[test]
+fn a_live_tree_outside_a_clone_says_where_to_run_it() {
+    let dir = std::env::temp_dir().join("gltree-not-a-clone");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args(["tree", "1"])
+        .current_dir(&dir)
+        .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("origin"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn every_roots_tree_from_the_server_is_refused_until_it_can_read_every_item() {
+    let out = gltree(&["tree"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--snapshot"));
+}

@@ -1,7 +1,8 @@
 //! A tracker read from a snapshot file: a JSON list of items.
 
 use crate::item::Item;
-use crate::tracker::{Error, Tracker};
+use crate::tracker::{Error, Linked, Tracker, level_of};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct SnapshotFile {
@@ -19,6 +20,10 @@ impl Tracker for SnapshotFile {
         let bytes = std::fs::read(&self.path)
             .map_err(|e| Error::Source(format!("{}: {e}", self.path.display())))?;
         Self::parse(&bytes)
+    }
+
+    fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {
+        Ok(level_of(&self.all_items()?, iids))
     }
 }
 

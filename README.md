@@ -14,6 +14,18 @@ cargo install --git https://github.com/kihyun1998/gltree
 
 ## Use
 
+Inside a clone of the tracker's project:
+
+```sh
+gltree tree 12                                  # the tree under #12, read from the server
+```
+
+gltree finds the project in `git remote get-url origin` and logs in with your glab login for that
+host (its token and `ca_cert`). `GITLAB_TOKEN` and `GLTREE_CA_CERT` override them. It reads only
+the tree asked for: one request per depth, along the links between parents and children.
+
+From a saved snapshot instead:
+
 ```sh
 gltree tree 12 --snapshot tracker.json          # the tree under #12
 gltree tree --snapshot tracker.json             # every root's tree
@@ -29,7 +41,8 @@ gltree tree 12 --snapshot tracker.json --json   # the same tree as JSON
 Each node shows its state, and `closed/total` of its descendants when it has any.
 
 A snapshot is a JSON list of items (`iid`, `title`, `state`, `desc`, and optionally `labels` and
-`links`). Reading the server directly is not built yet.
+`links`). Every root's tree (`gltree tree` with no number) needs every item, so for now it needs
+`--snapshot`.
 
 `--json` prints `{"version": 1, "roots": [node]}`, where a node is
 `{number, title, state, closed, total, children}`.

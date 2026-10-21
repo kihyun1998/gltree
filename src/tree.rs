@@ -19,13 +19,61 @@ pub struct Node {
     pub children: Vec<Node>,
 }
 
-/// The tree under `root`, or every root's tree when `root` is `None`.
+/// The tree under `root`, or every root's tree when `root` is `None`, from every item.
 pub fn tree(
     tracker: &dyn Tracker,
     scheme: &dyn RelationScheme,
     root: Option<u64>,
 ) -> Result<Vec<Node>, Error> {
-    let items = tracker.all_items()?;
+    draw(&tracker.all_items()?, scheme, root)
+}
+
+/// The tree under `root`, reading only that tree: one `level` request per depth along the links.
+pub fn live_tree(
+    tracker: &dyn Tracker,
+    scheme: &dyn RelationScheme,
+    root: u64,
+) -> Result<Vec<Node>, Error> {
+    draw(&subtree(tracker, scheme, root)?, scheme, Some(root))
+}
+
+/// `root` and its descendants. A linked item is a child only when the scheme names the node as its parent.
+pub fn subtree(
+    tracker: &dyn Tracker,
+    scheme: &dyn RelationScheme,
+    root: u64,
+) -> Result<Vec<Item>, Error> {
+    let mut found = tracker.level(&[root])?;
+    let first = found.get(&root).ok_or(Error::NotFound(root))?;
+    let mut out = vec![first.item.clone()];
+    let mut seen = HashSet::from([root]);
+    let mut nodes = vec![root];
+    while !nodes.is_empty() {
+        let mut next = Vec::new();
+        for n in &nodes {
+            let Some(at) = found.get(n) else { continue };
+            for c in &at.linked {
+                if scheme.parent_of(c) == Some(*n) && seen.insert(c.iid) {
+                    out.push(c.clone());
+                    next.push(c.iid);
+                }
+            }
+        }
+        found = if next.is_empty() {
+            HashMap::new()
+        } else {
+            tracker.level(&next)?
+        };
+        nodes = next;
+    }
+    Ok(out)
+}
+
+fn draw(
+    items: &[Item],
+    scheme: &dyn RelationScheme,
+    root: Option<u64>,
+) -> Result<Vec<Node>, Error> {
     let by: HashMap<u64, &Item> = items.iter().map(|it| (it.iid, it)).collect();
     let mut kids: BTreeMap<u64, Vec<&Item>> = BTreeMap::new();
     let mut sorted: Vec<&Item> = items.iter().collect();
@@ -130,7 +178,7 @@ mod tests {
     }
 
     fn draw(items: Vec<Item>, root: Option<u64>) -> Vec<String> {
-        render(&tree(&FakeTracker { items }, &ParentLine, root).unwrap())
+        render(&tree(&FakeTracker::new(items), &ParentLine, root).unwrap())
     }
 
     fn three_levels() -> Vec<Item> {
@@ -199,28 +247,102 @@ mod tests {
 
     #[test]
     fn a_root_that_is_not_in_the_tracker_is_an_error() {
-        let r = tree(
-            &FakeTracker {
-                items: three_levels(),
-            },
-            &ParentLine,
-            Some(42),
+        let r = tree(&FakeTracker::new(three_levels()), &ParentLine, Some(42));
+        assert!(matches!(r, Err(Error::NotFound(42))));
+    }
+
+    fn linked(mut items: Vec<Item>) -> Vec<Item> {
+        // every parent and child joined both ways, as the tracker convention requires
+        let pairs: Vec<(u64, u64)> = items
+            .iter()
+            .filter_map(|it| ParentLine.parent_of(it).map(|p| (it.iid, p)))
+            .collect();
+        for it in &mut items {
+            for (c, p) in &pairs {
+                if it.iid == *c {
+                    it.links.push(*p);
+                }
+                if it.iid == *p {
+                    it.links.push(*c);
+                }
+            }
+        }
+        items
+    }
+
+    #[test]
+    fn the_walk_asks_one_level_per_depth() {
+        let t = FakeTracker::new(linked(three_levels()));
+        subtree(&t, &ParentLine, 1).unwrap();
+        assert_eq!(*t.levels.borrow(), vec![vec![1], vec![2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn the_walk_draws_what_reading_every_item_draws() {
+        let t = FakeTracker::new(linked(three_levels()));
+        assert_eq!(
+            live_tree(&t, &ParentLine, 1).unwrap(),
+            tree(&t, &ParentLine, Some(1)).unwrap()
         );
+        assert_eq!(
+            live_tree(&t, &ParentLine, 3).unwrap(),
+            tree(&t, &ParentLine, Some(3)).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_linked_item_that_names_another_parent_is_not_a_child() {
+        let mut items = linked(three_levels());
+        let mut stray = item(6, State::Open, "Parent: #9");
+        stray.links = vec![1];
+        items[0].links.push(6);
+        items.push(stray);
+        let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
+            .unwrap()
+            .iter()
+            .map(|it| it.iid)
+            .collect();
+        assert!(!got.contains(&6), "{got:?}");
+        assert_eq!(got.len(), 5);
+    }
+
+    #[test]
+    fn a_child_without_its_link_is_not_found_by_the_walk() {
+        let mut items = linked(three_levels());
+        items
+            .iter_mut()
+            .for_each(|it| it.links.retain(|l| *l != 5 && it.iid != 5));
+        let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
+            .unwrap()
+            .iter()
+            .map(|it| it.iid)
+            .collect();
+        assert!(!got.contains(&5), "{got:?}");
+    }
+
+    #[test]
+    fn the_walk_stops_at_a_cycle() {
+        let items = linked(vec![
+            item(1, State::Open, "Parent: #2"),
+            item(2, State::Open, "Parent: #1"),
+        ]);
+        let t = FakeTracker::new(items);
+        assert_eq!(subtree(&t, &ParentLine, 1).unwrap().len(), 2);
+        assert_eq!(
+            render(&live_tree(&t, &ParentLine, 1).unwrap()),
+            ["#1 [open] t1  0/1", "  #2 [open] t2"]
+        );
+    }
+
+    #[test]
+    fn a_walk_from_an_absent_root_is_an_error() {
+        let r = subtree(&FakeTracker::new(three_levels()), &ParentLine, 42);
         assert!(matches!(r, Err(Error::NotFound(42))));
     }
 
     #[test]
     fn json_nests_the_same_tree_under_a_version() {
-        let v = to_json(
-            &tree(
-                &FakeTracker {
-                    items: three_levels(),
-                },
-                &ParentLine,
-                Some(3),
-            )
-            .unwrap(),
-        );
+        let v = to_json(&tree(&FakeTracker::new(three_levels()), &ParentLine, Some(3)).unwrap());
         assert_eq!(
             v,
             json!({

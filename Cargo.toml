@@ -10,3 +10,5 @@ repository = "https://github.com/kihyun1998/gltree"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10.0"
+ureq = { version = "3.4.2", features = ["native-tls"] }

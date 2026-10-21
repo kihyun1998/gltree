@@ -1,4 +1,7 @@
 use clap::{Parser, Subcommand};
+use gltree::gitlab::GitLab;
+use gltree::login;
+use gltree::remote::Remote;
 use gltree::scheme::ParentLine;
 use gltree::snapshot::SnapshotFile;
 use gltree::tree;
@@ -39,6 +42,17 @@ fn parse_iid(s: &str) -> Result<u64, String> {
         .map_err(|_| format!("not an item number: {s}"))
 }
 
+/// The tracker of the clone gltree runs in, through the user's glab login.
+fn server() -> Result<GitLab, Box<dyn std::error::Error>> {
+    let remote = Remote::of_clone(&std::env::current_dir()?)?;
+    let env = |k: &str| std::env::var(k).ok();
+    let yaml = login::glab_config_paths(&env, std::env::home_dir())
+        .into_iter()
+        .find_map(|p| std::fs::read_to_string(p).ok());
+    let login = login::login(yaml.as_deref(), &remote.host, &env)?;
+    Ok(GitLab::new(login, &remote.path)?)
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -56,10 +70,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             snapshot,
             json,
         } => {
-            let Some(path) = snapshot else {
-                return Err("reading the server is not built yet; pass --snapshot <file>".into());
+            let nodes = match (snapshot, root) {
+                (Some(path), _) => tree::tree(&SnapshotFile { path }, &ParentLine, root)?,
+                (None, Some(r)) => tree::live_tree(&server()?, &ParentLine, r)?,
+                (None, None) => {
+                    return Err("every root's tree reads every item, which is not built for the server yet; name a root, or pass --snapshot".into());
+                }
             };
-            let nodes = tree::tree(&SnapshotFile { path }, &ParentLine, root)?;
             let mut out = std::io::stdout().lock();
             if json {
                 writeln!(
