@@ -172,3 +172,53 @@ fn an_unknown_state_policy_in_the_repo_config_stops_every_command() {
         "{err}"
     );
 }
+
+#[test]
+fn new_in_a_repo_without_a_repo_config_is_refused_before_reaching_the_server() {
+    let dir = std::env::temp_dir().join("gltree-no-config");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(dir.join("body.md"), "x").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args([
+            "new",
+            "--parent",
+            "1",
+            "--title",
+            "t",
+            "--body-file",
+            "body.md",
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(".gltree.toml") && !err.contains("origin"),
+        "{err}"
+    );
+}
+
+#[test]
+fn new_refuses_a_body_file_that_is_not_utf8() {
+    let dir = std::env::temp_dir().join("gltree-bad-body");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("body.md"), [0xff, 0xfe, 0x41]).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args(["new", "--title", "t", "--body-file", "body.md"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("UTF-8"));
+}

@@ -61,6 +61,19 @@ Kinds: `parent-line`, `task`, `missing-parent`, `unlinked`, `stray-link`, `cycle
 `closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
 `{"version": 1, "findings": [{kind, item, detail}]}`.
 
+## New
+
+```sh
+gltree new --parent 12 --title "The drawer keeps its width" --body-file body.md --label bug,UI:Dialog
+```
+
+Creates an issue whose body is `Parent: #12`, a blank line, then `body.md` (UTF-8), and links it
+to #12, in one step. Without `--parent` it creates a root. Only the labels passed are applied.
+It refuses, before writing anything, in a repo without `.gltree.toml`, when #12 does not exist,
+or when `body.md` already opens with a `Parent:` line. If the issue is created but the link fails,
+it names the issue and the link left to add, and exits 2. `--json` prints
+`{"version": 1, "created": {number, url}, "link": {parent, child} | null}`.
+
 ## Repo config
 
 A consuming repo commits `.gltree.toml` at its root; every key is optional:

@@ -10,3 +10,4 @@ pub mod scheme;
 pub mod snapshot;
 pub mod tracker;
 pub mod tree;
+pub mod write;

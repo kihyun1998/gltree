@@ -7,6 +7,7 @@ use gltree::remote::Remote;
 use gltree::snapshot::SnapshotFile;
 use gltree::tracker::Tracker;
 use gltree::tree;
+use gltree::write;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -41,6 +42,23 @@ enum Command {
         /// Read the tracker from a snapshot file instead of the server
         #[arg(long)]
         snapshot: Option<PathBuf>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create an item whose body opens with `Parent: #N`, and link it to N, in one step
+    New {
+        /// The parent, as `N` or `#N`; without it the item is a root
+        #[arg(long, value_parser = parse_iid)]
+        parent: Option<u64>,
+        #[arg(long)]
+        title: String,
+        /// The body, a UTF-8 file; gltree writes the Parent line above it
+        #[arg(long)]
+        body_file: PathBuf,
+        /// A label to apply; repeat it, or separate labels with commas
+        #[arg(long = "label")]
+        labels: Vec<String>,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -139,6 +157,34 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             } else {
                 ExitCode::from(1)
             })
+        }
+        Command::New {
+            parent,
+            title,
+            body_file,
+            labels,
+            json,
+        } => {
+            let bytes =
+                std::fs::read(&body_file).map_err(|e| format!("{}: {e}", body_file.display()))?;
+            let text = String::from_utf8(bytes)
+                .map_err(|_| format!("{} is not UTF-8", body_file.display()))?;
+            let labels = write::split_labels(&labels);
+            write::require_opt_in(config.present)?;
+            let made = write::new_item(&server()?, config.present, parent, &title, &text, &labels)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&write::new_json(&made))?
+                )?;
+            } else {
+                match made.link {
+                    Some((p, c)) => writeln!(out, "#{c} under #{p}: {}", made.created.url)?,
+                    None => writeln!(out, "#{} (a root): {}", made.created.iid, made.created.url)?,
+                }
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Snapshot { out: path } => {
             let items = server()?.all_items()?;

@@ -2,7 +2,7 @@
 
 use crate::item::{Item, State};
 use crate::login::Login;
-use crate::tracker::{Error, Linked, Tracker};
+use crate::tracker::{Created, Error, Linked, Tracker};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use ureq::Agent;
@@ -51,11 +51,25 @@ impl GitLab {
 
     fn graphql(&self, query: &str) -> Result<Value, Error> {
         let url = format!("{}/api/graphql", self.login.api_base);
-        let body =
-            serde_json::to_vec(&json!({ "query": query })).expect("a JSON object serialises");
+        let (status, bytes) = self.post(&url, &json!({ "query": query }))?;
+        answer(status, &bytes)
+    }
+
+    /// A REST call under this project, e.g. `issues`; the status and the body.
+    fn rest(&self, path: &str, body: &Value) -> Result<(u16, Vec<u8>), Error> {
+        let url = format!(
+            "{}/api/v4/projects/{}/{path}",
+            self.login.api_base,
+            encode_path(&self.project)
+        );
+        self.post(&url, body)
+    }
+
+    fn post(&self, url: &str, body: &Value) -> Result<(u16, Vec<u8>), Error> {
+        let body = serde_json::to_vec(body).expect("a JSON value serialises");
         let mut resp = self
             .agent
-            .post(&url)
+            .post(url)
             .header("Authorization", &format!("Bearer {}", self.login.token))
             .header("Content-Type", "application/json")
             .send(&body[..])
@@ -67,7 +81,7 @@ impl GitLab {
             .limit(u64::MAX)
             .read_to_vec()
             .map_err(|e| Error::Source(format!("{url}: {e}")))?;
-        answer(status, &bytes)
+        Ok((status, bytes))
     }
 }
 
@@ -94,6 +108,60 @@ impl Tracker for GitLab {
         }
         Ok(out)
     }
+
+    fn create_item(&self, title: &str, desc: &str, labels: &[String]) -> Result<Created, Error> {
+        let body = json!({ "title": title, "description": desc, "labels": labels.join(",") });
+        let (status, bytes) = self.rest("issues", &body)?;
+        created(status, &bytes)
+    }
+
+    fn add_link(&self, a: u64, b: u64) -> Result<(), Error> {
+        let body = json!({ "target_project_id": self.project, "target_issue_iid": b, "link_type": "relates_to" });
+        let (status, bytes) = self.rest(&format!("issues/{a}/links"), &body)?;
+        linked(status, &bytes)
+    }
+}
+
+/// A project path as one URL segment: `group/app` → `group%2Fapp`.
+pub fn encode_path(path: &str) -> String {
+    path.bytes()
+        .map(|c| match c {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (c as char).to_string()
+            }
+            _ => format!("%{c:02X}"),
+        })
+        .collect()
+}
+
+/// The item a create answered with, or the server's refusal.
+pub fn created(status: u16, body: &[u8]) -> Result<Created, Error> {
+    let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    if !(200..300).contains(&status) {
+        return Err(Error::Server(format!(
+            "HTTP {status} {}",
+            v.get("message").map(Value::to_string).unwrap_or_default()
+        )));
+    }
+    let iid = v["iid"]
+        .as_u64()
+        .ok_or_else(|| Error::Server(format!("a created issue without iid: {v}")))?;
+    Ok(Created {
+        iid,
+        url: v["web_url"].as_str().unwrap_or_default().into(),
+    })
+}
+
+/// A link answer: created, or already there (409), or refused.
+pub fn linked(status: u16, body: &[u8]) -> Result<(), Error> {
+    if (200..300).contains(&status) || status == 409 {
+        return Ok(());
+    }
+    let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    Err(Error::Server(format!(
+        "HTTP {status} {}",
+        v.get("message").map(Value::to_string).unwrap_or_default()
+    )))
 }
 
 /// The level query, with the item numbers written into it: glab-style array variables do not survive every client.
@@ -339,6 +407,33 @@ mod tests {
         let q = page_query("team/app", Some("ab\"c"));
         assert!(q.contains(r#"after:"ab\"c""#), "{q}");
         assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+    }
+
+    #[test]
+    fn a_project_path_is_one_url_segment() {
+        assert_eq!(encode_path("team/sub/app.v2"), "team%2Fsub%2Fapp.v2");
+    }
+
+    #[test]
+    fn a_create_answer_gives_the_number_and_url_or_the_refusal() {
+        let ok = br#"{"iid": 42, "web_url": "https://gitlab.example.com/team/app/-/issues/42"}"#;
+        assert_eq!(created(201, ok).unwrap().iid, 42);
+        assert!(
+            matches!(created(403, br#"{"message":"403 Forbidden"}"#), Err(Error::Server(m)) if m.starts_with("HTTP 403"))
+        );
+        // a refusal is told by its status, whatever the body carries
+        let refused_with_iid = br#"{"iid": 5, "message": "title is too long"}"#;
+        assert!(
+            matches!(created(400, refused_with_iid), Err(Error::Server(m)) if m.starts_with("HTTP 400"))
+        );
+        assert!(created(201, b"{}").is_err());
+    }
+
+    #[test]
+    fn a_link_that_already_exists_is_success() {
+        assert!(linked(201, b"{}").is_ok());
+        assert!(linked(409, br#"{"message":"Issue(s) already assigned"}"#).is_ok());
+        assert!(matches!(linked(422, b"{}"), Err(Error::Server(m)) if m.contains("422")));
     }
 
     #[test]

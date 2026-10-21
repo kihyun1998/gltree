@@ -1,7 +1,7 @@
 //! A tracker read from a snapshot file: a JSON list of items.
 
 use crate::item::Item;
-use crate::tracker::{Error, Linked, Tracker, level_of};
+use crate::tracker::{Created, Error, Linked, Tracker, level_of};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -33,6 +33,14 @@ impl Tracker for SnapshotFile {
 
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {
         Ok(level_of(&self.all_items()?, iids))
+    }
+
+    fn create_item(&self, _: &str, _: &str, _: &[String]) -> Result<Created, Error> {
+        Err(Error::Refused("a snapshot is read only".into()))
+    }
+
+    fn add_link(&self, _: u64, _: u64) -> Result<(), Error> {
+        Err(Error::Refused("a snapshot is read only".into()))
     }
 }
 
