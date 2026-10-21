@@ -1,6 +1,6 @@
 //! The repo config: `.gltree.toml` at a consuming repo's root, saying it uses gltree and how.
 
-use crate::check::{RootsOnly, StatePolicy};
+use crate::check::{Links, RootsOnly, StatePolicy};
 use crate::scheme::{ParentLine, RelationScheme};
 use crate::tracker::Error;
 use serde::Deserialize;
@@ -10,12 +10,15 @@ use std::process::Command;
 pub const FILE: &str = ".gltree.toml";
 pub const SCHEMES: &[&str] = &["parent-line"];
 pub const POLICIES: &[&str] = &["roots-only"];
+pub const LINKS: &[&str] = &["tree-only", "shared"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoConfig {
     pub root_label: String,
     pub relation_scheme: String,
     pub state_policy: String,
+    /// What the repo's links may join: `tree-only` or `shared` with related issues.
+    pub links: String,
     /// Whether the repo committed a config file, which is what lets gltree write to its tracker.
     pub present: bool,
 }
@@ -26,6 +29,7 @@ struct File {
     root_label: Option<String>,
     relation_scheme: Option<String>,
     state_policy: Option<String>,
+    links: Option<String>,
 }
 
 impl RepoConfig {
@@ -34,6 +38,7 @@ impl RepoConfig {
             root_label: "SPEC".into(),
             relation_scheme: SCHEMES[0].into(),
             state_policy: POLICIES[0].into(),
+            links: LINKS[0].into(),
             present: false,
         }
     }
@@ -62,6 +67,7 @@ impl RepoConfig {
                 d.relation_scheme,
             )?,
             state_policy: known("state_policy", f.state_policy, POLICIES, d.state_policy)?,
+            links: known("links", f.links, LINKS, d.links)?,
             present: true,
         })
     }
@@ -74,6 +80,14 @@ impl RepoConfig {
     /// The policy `state_policy` names; `parse` admits only the names in `POLICIES`.
     pub fn policy(&self) -> Box<dyn StatePolicy> {
         Box::new(RootsOnly)
+    }
+
+    pub fn links(&self) -> Links {
+        if self.links == "shared" {
+            Links::Shared
+        } else {
+            Links::TreeOnly
+        }
     }
 
     /// The config of the clone `dir` is in; the defaults outside a clone.
@@ -143,6 +157,17 @@ mod tests {
             e.contains("every-parent") && e.contains("roots-only"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn links_are_tree_only_unless_the_repo_shares_them() {
+        assert_eq!(RepoConfig::parse(None).unwrap().links(), Links::TreeOnly);
+        let shared = RepoConfig::parse(Some("links = \"shared\"")).unwrap();
+        assert_eq!(shared.links(), Links::Shared);
+        let e = RepoConfig::parse(Some("links = \"any\""))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("tree-only") && e.contains("shared"), "{e}");
     }
 
     #[test]

@@ -19,5 +19,10 @@ its own Parent line names the node, because a link has no direction.
 ## Consequences
 
 A child without its link is invisible to a tree walk, so creating or moving a child writes the
-line and the link together, and `check` reports a Parent line without its link, and a link that
-joins no parent and child.
+line and the link together, and `check` reports a Parent line without its link.
+
+Reserving links for the tree was decided on one tracker that had no other links. A second tracker
+already links related issues, so the reservation is the repo's choice (`links` in its repo
+config): `tree-only`, the default, where `check` also reports a link that joins no parent and
+child; or `shared`, where it does not. The walk is unaffected either way, since a linked item is a
+child only by its first line, and `move` only ever removes the link to the old parent.

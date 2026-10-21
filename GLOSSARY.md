@@ -28,7 +28,7 @@ An item with no Parent line.
 A child, or a descendant of a child.
 
 **Link**:
-A `relates_to` link between an item and its parent. It has no direction and joins nothing but a parent and its child.
+A `relates_to` link between two items. It has no direction; it joins every parent and child, and, in a repo whose config shares links, related items too.
 _Avoid_: relation, related issue
 
 ### Rules a repo chooses

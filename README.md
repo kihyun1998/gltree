@@ -69,6 +69,7 @@ A consuming repo commits `.gltree.toml` at its root; every key is optional:
 root_label = "SPEC"
 relation_scheme = "parent-line"   # known: parent-line
 state_policy = "roots-only"       # known: roots-only
+links = "tree-only"               # or "shared": links also join related issues, no stray-link
 ```
 
 Exit status: 0 on success, 1 when `check` finds anything, 2 on a usage, input, config or server error.

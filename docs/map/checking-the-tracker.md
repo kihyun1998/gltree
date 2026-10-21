@@ -12,7 +12,7 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 - `parent-line`: more than one line that parses as a Parent line, or one that is not the first.
 - `unlinked` needs to know links were recorded: an item's `links` is `None` in a snapshot that
   never recorded them, and then nothing is reported.
-- `stray-link` is gltree's own (ADR-0001: links join only a parent and its child). It is
+- `stray-link` is gltree's own, and only in a repo whose `links` is `tree-only` (ADR-0001). It is
   reported once per pair, at the lower number.
 - `cycle` follows parents up from each item, so an item whose ancestors loop is reported along
   with the loop's members — as the Python tool does.
@@ -24,7 +24,8 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 - The full read is paged GraphQL (100 items a page) with type, labels and link ends; a node whose
   links overflow one page is an error, since `unlinked` and `stray-link` need every link.
 - The repo config `.gltree.toml` sits at `git rev-parse --show-toplevel`: `root_label` (default
-  `SPEC`), `relation_scheme` (`parent-line`), `state_policy` (`roots-only`). Unknown keys and
+  `SPEC`), `relation_scheme` (`parent-line`), `state_policy` (`roots-only`), `links` (`tree-only`,
+  or `shared` for a repo that also links related issues). Unknown keys and
   unknown values fail, listing the known values. Absent file: defaults, and `present = false`,
   which #5's write commands read as "this repo has not opted in".
 

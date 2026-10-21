@@ -117,7 +117,12 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Check { snapshot, json } => {
             let items = source(snapshot)?.all_items()?;
-            let found = check::check(&items, scheme.as_ref(), config.policy().as_ref());
+            let found = check::check(
+                &items,
+                scheme.as_ref(),
+                config.policy().as_ref(),
+                config.links(),
+            );
             if json {
                 writeln!(
                     out,

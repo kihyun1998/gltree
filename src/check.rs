@@ -53,10 +53,20 @@ impl StatePolicy for RootsOnly {
     }
 }
 
+/// What a repo's `relates_to` links may join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Links {
+    /// Only a parent and its child; any other link is a `stray-link` (ADR-0001).
+    TreeOnly,
+    /// Also related issues; no link is stray.
+    Shared,
+}
+
 pub fn check(
     items: &[Item],
     scheme: &dyn RelationScheme,
     policy: &dyn StatePolicy,
+    links: Links,
 ) -> Vec<Finding> {
     let by: HashMap<u64, &Item> = items.iter().map(|it| (it.iid, it)).collect();
     let mut sorted: Vec<&Item> = items.iter().collect();
@@ -103,7 +113,12 @@ pub fn check(
                 format!("no relates_to link to #{line}, so tree <root> misses it"),
             );
         }
-        for &l in it.link_ends().iter().filter(|l| **l > it.iid) {
+        let strays = if links == Links::TreeOnly {
+            it.link_ends()
+        } else {
+            &[]
+        };
+        for &l in strays.iter().filter(|l| **l > it.iid) {
             let joined = p == Some(l)
                 || by
                     .get(&l)
@@ -172,7 +187,7 @@ mod tests {
     }
 
     fn kinds(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &ParentLine, &RootsOnly)
+        check(items, &ParentLine, &RootsOnly, Links::TreeOnly)
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
@@ -236,6 +251,16 @@ mod tests {
             item(3, Open, "Parent: #1", &[1, 2]),
         ];
         assert_eq!(kinds(&items), [("stray-link", 2)]);
+    }
+
+    #[test]
+    fn a_repo_that_shares_links_with_related_issues_has_no_stray_link() {
+        let items = [
+            item(1, Open, "", &[2, 3]),
+            item(2, Open, "Parent: #1", &[1, 3]),
+            item(3, Open, "Parent: #1", &[1, 2]),
+        ];
+        assert!(check(&items, &ParentLine, &RootsOnly, Links::Shared).is_empty());
     }
 
     #[test]
