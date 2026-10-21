@@ -10,6 +10,15 @@ pub struct SnapshotFile {
 }
 
 impl SnapshotFile {
+    /// The snapshot text `parse` reads back: a JSON list of items, by number.
+    pub fn to_bytes(items: &[Item]) -> Vec<u8> {
+        let mut sorted: Vec<&Item> = items.iter().collect();
+        sorted.sort_by_key(|it| it.iid);
+        let mut out = serde_json::to_vec_pretty(&sorted).expect("items serialise");
+        out.push(b'\n');
+        out
+    }
+
     pub fn parse(bytes: &[u8]) -> Result<Vec<Item>, Error> {
         serde_json::from_slice(bytes).map_err(|e| Error::Malformed(e.to_string()))
     }
@@ -41,7 +50,11 @@ mod tests {
         .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(
-            (items[0].iid, items[0].state, items[0].links.clone()),
+            (
+                items[0].iid,
+                items[0].state,
+                items[0].links.clone().unwrap()
+            ),
             (3, State::Closed, vec![1])
         );
     }
@@ -51,7 +64,19 @@ mod tests {
         let items =
             SnapshotFile::parse(br#"[{"iid": 3, "title": "t", "state": "open", "desc": ""}]"#)
                 .unwrap();
-        assert!(items[0].links.is_empty() && items[0].labels.is_empty());
+        assert!(items[0].links.is_none() && items[0].labels.is_empty());
+    }
+
+    #[test]
+    fn what_to_bytes_writes_parse_reads_back() {
+        let mut a =
+            crate::item::Item::new(2, State::Closed, "설정 「외관」", "Parent: #1\r\n\r\nx");
+        a.kind = "task".into();
+        a.labels = vec!["SPEC".into()];
+        a.links = Some(vec![1]);
+        let b = crate::item::Item::new(1, State::Open, "t1", "");
+        let back = SnapshotFile::parse(&SnapshotFile::to_bytes(&[a.clone(), b.clone()])).unwrap();
+        assert_eq!(back, vec![b, a]);
     }
 
     #[test]

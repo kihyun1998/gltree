@@ -260,10 +260,10 @@ mod tests {
         for it in &mut items {
             for (c, p) in &pairs {
                 if it.iid == *c {
-                    it.links.push(*p);
+                    it.links.get_or_insert_with(Vec::new).push(*p);
                 }
                 if it.iid == *p {
-                    it.links.push(*c);
+                    it.links.get_or_insert_with(Vec::new).push(*c);
                 }
             }
         }
@@ -294,8 +294,8 @@ mod tests {
     fn a_linked_item_that_names_another_parent_is_not_a_child() {
         let mut items = linked(three_levels());
         let mut stray = item(6, State::Open, "Parent: #9");
-        stray.links = vec![1];
-        items[0].links.push(6);
+        stray.links = Some(vec![1]);
+        items[0].links.get_or_insert_with(Vec::new).push(6);
         items.push(stray);
         let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
             .unwrap()
@@ -309,9 +309,12 @@ mod tests {
     #[test]
     fn a_child_without_its_link_is_not_found_by_the_walk() {
         let mut items = linked(three_levels());
-        items
-            .iter_mut()
-            .for_each(|it| it.links.retain(|l| *l != 5 && it.iid != 5));
+        items.iter_mut().for_each(|it| {
+            let me = it.iid;
+            if let Some(ls) = it.links.as_mut() {
+                ls.retain(|l| *l != 5 && me != 5)
+            }
+        });
         let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
             .unwrap()
             .iter()

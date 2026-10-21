@@ -1,9 +1,11 @@
 use clap::{Parser, Subcommand};
+use gltree::check;
+use gltree::config::RepoConfig;
 use gltree::gitlab::GitLab;
 use gltree::login;
 use gltree::remote::Remote;
-use gltree::scheme::ParentLine;
 use gltree::snapshot::SnapshotFile;
+use gltree::tracker::Tracker;
 use gltree::tree;
 use std::io::Write;
 use std::path::PathBuf;
@@ -34,6 +36,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Every way the tracker breaks the tree convention; exits 1 when there is any
+    Check {
+        /// Read the tracker from a snapshot file instead of the server
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save every item of the tracker, with its links, to a file
+    Snapshot {
+        /// The file to write
+        out: PathBuf,
+    },
 }
 
 fn parse_iid(s: &str) -> Result<u64, String> {
@@ -53,9 +69,17 @@ fn server() -> Result<GitLab, Box<dyn std::error::Error>> {
     Ok(GitLab::new(login, &remote.path)?)
 }
 
+/// The snapshot when one is named, else the server.
+fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker>, Box<dyn std::error::Error>> {
+    Ok(match snapshot {
+        Some(path) => Box::new(SnapshotFile { path }),
+        None => Box::new(server()?),
+    })
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("gltree: {e}");
             ExitCode::from(2)
@@ -63,21 +87,21 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let config = RepoConfig::of_clone(&std::env::current_dir()?)?;
+    let scheme = config.scheme();
+    let mut out = std::io::stdout().lock();
     match cli.command {
         Command::Tree {
             root,
             snapshot,
             json,
         } => {
+            let tracker = source(snapshot.clone())?;
             let nodes = match (snapshot, root) {
-                (Some(path), _) => tree::tree(&SnapshotFile { path }, &ParentLine, root)?,
-                (None, Some(r)) => tree::live_tree(&server()?, &ParentLine, r)?,
-                (None, None) => {
-                    return Err("every root's tree reads every item, which is not built for the server yet; name a root, or pass --snapshot".into());
-                }
+                (None, Some(r)) => tree::live_tree(tracker.as_ref(), scheme.as_ref(), r)?,
+                _ => tree::tree(tracker.as_ref(), scheme.as_ref(), root)?,
             };
-            let mut out = std::io::stdout().lock();
             if json {
                 writeln!(
                     out,
@@ -89,7 +113,34 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     writeln!(out, "{line}")?;
                 }
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Check { snapshot, json } => {
+            let items = source(snapshot)?.all_items()?;
+            let found = check::check(&items, scheme.as_ref(), config.policy().as_ref());
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&check::to_json(&found))?
+                )?;
+            } else {
+                for line in check::render(&found) {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Ok(if found.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+        Command::Snapshot { out: path } => {
+            let items = server()?.all_items()?;
+            std::fs::write(&path, SnapshotFile::to_bytes(&items))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            writeln!(out, "{} items -> {}", items.len(), path.display())?;
+            Ok(ExitCode::SUCCESS)
         }
     }
 }

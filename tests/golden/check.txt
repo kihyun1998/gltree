@@ -1,0 +1,9 @@
+missing-parent             #8  #99 does not exist
+unlinked                   #8  no relates_to link to #99, so tree <root> misses it
+cycle                      #9  following parents leads back here
+cycle                      #10  following parents leads back here
+closed-parent-open-child   #12  closed, with an open descendant
+parent-line                #14  one Parent line, and only as the first line
+task                       #14  still a Task
+open-parent-all-closed     #15  open, every descendant closed
+8 anomalies

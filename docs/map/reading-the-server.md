@@ -34,7 +34,6 @@ level walk (`src/remote.rs`, `src/login.rs`, `src/gitlab.rs`, `subtree` in `src/
 ## Known holes / open
 
 - A token glab keeps in the OS keyring (`use_keyring`) is not read; the error names `GITLAB_TOKEN`.
-- `tree` with no root from the server needs every item, which arrives with `check` (#4).
 - native-tls on macOS against a `CA:TRUE` self-signed sheet is not yet measured.
 - native-tls on Linux links OpenSSL; the musl release targets need it vendored (#7).
 

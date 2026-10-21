@@ -7,3 +7,8 @@
   #4 [open] 설정 「외관」 탭이 열린다
 #7 [closed] A lone piece of work
 #8 [open] Its parent was deleted
+#12 [closed] A closed root whose follow-up is still open  0/1
+  #13 [open] The open follow-up
+#14 [open] A task whose parent line slipped down
+#15 [open] An open root whose work is all done  1/1
+  #16 [closed] The done child

@@ -1,8 +1,8 @@
 //! An item of a tracker: one GitLab Issue, as gltree sees it.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
     Open,
@@ -18,18 +18,25 @@ impl State {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Item {
     pub iid: u64,
     pub title: String,
     pub state: State,
+    /// The GitLab work item type, lowercase: `issue`, or a leftover `task`.
+    #[serde(rename = "type", default = "issue")]
+    pub kind: String,
     #[serde(default)]
     pub desc: String,
     #[serde(default)]
     pub labels: Vec<String>,
-    /// The other ends of this item's links; empty when the source did not record them.
-    #[serde(default)]
-    pub links: Vec<u64>,
+    /// The other ends of this item's links; `None` when the source did not record links at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<u64>>,
+}
+
+fn issue() -> String {
+    "issue".into()
 }
 
 impl Item {
@@ -38,9 +45,14 @@ impl Item {
             iid,
             title: title.into(),
             state,
+            kind: issue(),
             desc: desc.into(),
             labels: vec![],
-            links: vec![],
+            links: None,
         }
+    }
+
+    pub fn link_ends(&self) -> &[u64] {
+        self.links.as_deref().unwrap_or_default()
     }
 }

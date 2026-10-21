@@ -108,8 +108,67 @@ fn a_live_tree_outside_a_clone_says_where_to_run_it() {
 }
 
 #[test]
-fn every_roots_tree_from_the_server_is_refused_until_it_can_read_every_item() {
-    let out = gltree(&["tree"]);
+fn check_matches_the_python_tool_byte_for_byte_and_exits_1() {
+    let out = gltree(&["check", "--snapshot", FIXTURE]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), golden("check.txt"));
+}
+
+#[test]
+fn check_json_lists_each_finding() {
+    let out = gltree(&["check", "--snapshot", FIXTURE, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["findings"].as_array().unwrap().len(), 8);
+    assert_eq!(v["findings"][0]["kind"], "missing-parent");
+    assert_eq!(v["findings"][0]["item"], 8);
+}
+
+#[test]
+fn a_clean_tracker_checks_with_exit_0() {
+    let dir = std::env::temp_dir().join("gltree-clean");
+    std::fs::create_dir_all(&dir).unwrap();
+    let snap = dir.join("clean.json");
+    std::fs::write(
+        &snap,
+        r#"[{"iid": 1, "title": "a", "state": "open", "desc": "", "links": [2]},
+            {"iid": 2, "title": "b", "state": "open", "desc": "Parent: #1", "links": [1]}]"#,
+    )
+    .unwrap();
+    let out = gltree(&["check", "--snapshot", snap.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "0 anomalies\n");
+}
+
+#[test]
+fn an_unknown_state_policy_in_the_repo_config_stops_every_command() {
+    let dir = std::env::temp_dir().join("gltree-bad-config");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(
+        dir.join(".gltree.toml"),
+        "state_policy = \"every-parent\"\n",
+    )
+    .unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+    let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args(["check", "--snapshot", fixture.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--snapshot"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("every-parent") && err.contains("roots-only"),
+        "{err}"
+    );
 }

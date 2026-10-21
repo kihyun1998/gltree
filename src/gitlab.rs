@@ -73,10 +73,16 @@ impl GitLab {
 
 impl Tracker for GitLab {
     fn all_items(&self) -> Result<Vec<Item>, Error> {
-        Err(Error::Source(
-            "reading every item from the server is not built yet; name a root, or pass --snapshot"
-                .into(),
-        ))
+        let (mut items, mut after) = (Vec::new(), None);
+        loop {
+            let (page, next) =
+                parse_page(&self.graphql(&page_query(&self.project, after.as_deref()))?)?;
+            items.extend(page);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => return Ok(items),
+            }
+        }
     }
 
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {
@@ -177,6 +183,73 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
     Ok(out)
 }
 
+/// One page of every work item, after `after` (a cursor from the previous page).
+pub fn page_query(project: &str, after: Option<&str>) -> String {
+    let after = after
+        .map(|a| format!(",after:{}", Value::String(a.into())))
+        .unwrap_or_default();
+    format!(
+        "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{iid title state workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{iid}}}}}}}}}}}}}}}}}}",
+        project = Value::String(project.into())
+    )
+}
+
+/// The items of a page with their type, labels and link ends, and the cursor of the next page.
+pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
+    let wi = data.pointer("/project/workItems").ok_or_else(|| {
+        Error::Source("the project is not on the server, or this token cannot see it".into())
+    })?;
+    let mut items = Vec::new();
+    for n in wi["nodes"].as_array().into_iter().flatten() {
+        let mut item = brief(n)?;
+        item.kind = n
+            .pointer("/workItemType/name")
+            .and_then(Value::as_str)
+            .unwrap_or("Issue")
+            .to_lowercase();
+        let widgets: Vec<&Value> = n["widgets"].as_array().into_iter().flatten().collect();
+        item.labels = widgets
+            .iter()
+            .filter_map(|w| w.pointer("/labels/nodes").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|l| l["title"].as_str().map(String::from))
+            .collect();
+        let links = widgets.iter().find_map(|w| w.get("linkedItems"));
+        if links
+            .and_then(|l| l.pointer("/pageInfo/hasNextPage"))
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Err(Error::Source(format!(
+                "#{} has more than 100 links; check cannot see them all",
+                item.iid
+            )));
+        }
+        item.links = Some(
+            links
+                .and_then(|l| l["nodes"].as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|x| {
+                    x.pointer("/workItem/iid")
+                        .and_then(Value::as_str)?
+                        .parse()
+                        .ok()
+                })
+                .collect(),
+        );
+        items.push(item);
+    }
+    let next = (wi.pointer("/pageInfo/hasNextPage").and_then(Value::as_bool) == Some(true))
+        .then(|| {
+            wi.pointer("/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+        .flatten();
+    Ok((items, next))
+}
+
 fn brief(n: &Value) -> Result<Item, Error> {
     let bad = || Error::Malformed(format!("a work item without iid/title/state: {n}"));
     let iid = n["iid"]
@@ -214,6 +287,58 @@ mod tests {
 
     fn level_answer(nodes: Vec<Value>) -> Value {
         json!({ "project": { "workItems": { "nodes": nodes } } })
+    }
+
+    #[test]
+    fn a_page_gives_type_labels_and_link_ends_and_the_next_cursor() {
+        let node = json!({
+            "iid": "7", "title": "t7", "state": "OPEN", "workItemType": { "name": "Task" },
+            "widgets": [
+                { "description": "Parent: #3" },
+                { "labels": { "nodes": [{ "title": "SPEC" }, { "title": "bug" }] } },
+                { "linkedItems": { "pageInfo": { "hasNextPage": false }, "nodes": [{ "workItem": { "iid": "3" } }] } }
+            ]
+        });
+        let data = json!({ "project": { "workItems": {
+            "pageInfo": { "hasNextPage": true, "endCursor": "abc" }, "nodes": [node] } } });
+        let (items, next) = parse_page(&data).unwrap();
+        assert_eq!(next.as_deref(), Some("abc"));
+        let it = &items[0];
+        assert_eq!((it.kind.as_str(), it.desc.as_str()), ("task", "Parent: #3"));
+        assert_eq!(
+            (it.labels.clone(), it.links.clone()),
+            (vec!["SPEC".to_string(), "bug".to_string()], Some(vec![3]))
+        );
+    }
+
+    #[test]
+    fn the_last_page_has_no_cursor_and_an_item_without_links_records_none_linked() {
+        let data = json!({ "project": { "workItems": {
+            "pageInfo": { "hasNextPage": false, "endCursor": "zzz" },
+            "nodes": [{ "iid": "1", "title": "t1", "state": "CLOSED", "workItemType": { "name": "Issue" },
+                        "widgets": [{ "description": "" }] }] } } });
+        let (items, next) = parse_page(&data).unwrap();
+        assert_eq!(next, None);
+        assert_eq!(
+            (items[0].kind.as_str(), items[0].links.clone()),
+            ("issue", Some(vec![]))
+        );
+    }
+
+    #[test]
+    fn a_page_with_more_links_than_one_page_is_an_error() {
+        let data = json!({ "project": { "workItems": { "pageInfo": { "hasNextPage": false }, "nodes": [{
+            "iid": "1", "title": "t1", "state": "OPEN", "workItemType": { "name": "Issue" },
+            "widgets": [{ "linkedItems": { "pageInfo": { "hasNextPage": true }, "nodes": [] } }] }] } } });
+        assert!(parse_page(&data).is_err());
+    }
+
+    #[test]
+    fn the_page_query_carries_the_cursor_only_after_the_first_page() {
+        assert!(!page_query("team/app", None).contains("after:"));
+        let q = page_query("team/app", Some("ab\"c"));
+        assert!(q.contains(r#"after:"ab\"c""#), "{q}");
+        assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
     }
 
     #[test]

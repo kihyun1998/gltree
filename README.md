@@ -38,13 +38,37 @@ gltree tree 12 --snapshot tracker.json --json   # the same tree as JSON
     #19 [open] Trailing space on the line
 ```
 
-Each node shows its state, and `closed/total` of its descendants when it has any.
+Each node shows its state, and `closed/total` of its descendants when it has any. `--json` prints
+`{"version": 1, "roots": [node]}`, where a node is `{number, title, state, closed, total, children}`.
 
 A snapshot is a JSON list of items (`iid`, `title`, `state`, `desc`, and optionally `labels` and
-`links`). Every root's tree (`gltree tree` with no number) needs every item, so for now it needs
-`--snapshot`.
+`links`). Every root's tree (`gltree tree` with no number) reads every item.
 
-`--json` prints `{"version": 1, "roots": [node]}`, where a node is
-`{number, title, state, closed, total, children}`.
+## Check
 
-Exit status: 0 on success, 2 on a usage, input or server error.
+```sh
+gltree check                       # every way the tracker breaks the convention; exit 1 when any
+gltree check --json
+gltree snapshot tracker.json       # save every item, with its links, for --snapshot
+```
+
+```
+unlinked                   #19  no relates_to link to #13, so tree <root> misses it
+1 anomalies
+```
+
+Kinds: `parent-line`, `task`, `missing-parent`, `unlinked`, `stray-link`, `cycle`,
+`closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
+`{"version": 1, "findings": [{kind, item, detail}]}`.
+
+## Repo config
+
+A consuming repo commits `.gltree.toml` at its root; every key is optional:
+
+```toml
+root_label = "SPEC"
+relation_scheme = "parent-line"   # known: parent-line
+state_policy = "roots-only"       # known: roots-only
+```
+
+Exit status: 0 on success, 1 when `check` finds anything, 2 on a usage, input, config or server error.

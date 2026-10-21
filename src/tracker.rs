@@ -78,7 +78,7 @@ pub fn level_of(items: &[Item], iids: &[u64]) -> HashMap<u64, Linked> {
         .filter_map(|n| by.get(n))
         .map(|it| {
             let linked = it
-                .links
+                .link_ends()
                 .iter()
                 .filter_map(|l| by.get(l))
                 .map(|l| (*l).clone())
