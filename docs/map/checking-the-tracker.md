@@ -22,7 +22,7 @@ How `gltree check` reads every item and reports where the tracker breaks the con
   key of the old format (`Parent`, `From`, `Related`, `Blocked by`, `Depends on`, plus the repo's
   `old_head_keys`), `: #`, a number, then nothing but a list, a reason in brackets or punctuation.
   `Parent: #1 is quoted here` is prose and passes; so does a head below a heading. The keys are a
-  list, not a shape, because a real tracker's body opened with `Covers gaps: #2 (…) + #3 (…)` —
+  list, not a shape, because a body can open with a line like `Fixed with: #2 (…) + #3 (…)` —
   the same shape as `Blocked by: #2550 (…), #2551.`, but prose that no migration would move.
 - `missing-reference` and `unlinked` cover `from`, `related` and `blocked_by` as `missing-parent`
   and `unlinked` cover `parent`. `unlinked` needs to know links were recorded: an item's `links` is

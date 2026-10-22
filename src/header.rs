@@ -181,7 +181,7 @@ pub const OLD_HEAD_KEYS: &[&str] = &["Parent", "From", "Related", "Blocked by", 
 /// The first line of `body` when it is still a first-line head: one of `OLD_HEAD_KEYS` or
 /// `more_keys`, a colon, and an issue number with nothing after it but a list, a reason or
 /// punctuation — such as `Blocked by: #4`. A sentence that only starts that way is not one, and
-/// another key with numbers (`Covers gaps: #2`) is prose of the body's own.
+/// another key with numbers (`Fixed with: #2`) is prose of the body's own.
 pub fn old_head<'a>(body: &'a str, more_keys: &[String]) -> Option<&'a str> {
     let line = body
         .split('\n')
@@ -473,7 +473,7 @@ mod tests {
             "Mentions Parent: #1 on its first line",
             "## Problem\nParent: #1",
             "Blocked by: none",
-            "Covers gaps: #2 (handshake errors) + #3 (nested)",
+            "Fixed with: #2 (the reader) + #3 (the writer)",
             "",
         ] {
             assert_eq!(old_head(body, &mine), None, "{body}");
