@@ -48,11 +48,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Create an item whose body opens with `Parent: #N`, and link it to N, in one step
+    /// Create an item whose body opens with `Parent: #N` and the origin line, linked to each, in one step
     New {
         /// The parent, as `N` or `#N`; without it the item is a root
         #[arg(long, value_parser = parse_iid)]
         parent: Option<u64>,
+        /// The item it was found while working, as `N` or `#N`: an origin line, not a parent
+        #[arg(long, value_parser = parse_iid)]
+        from: Option<u64>,
         #[arg(long)]
         title: String,
         /// The body, a UTF-8 file; gltree writes the Parent line above it
@@ -152,6 +155,12 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let config = RepoConfig::of_clone(&std::env::current_dir()?)?;
     let scheme = config.scheme();
+    let (policy, origin) = (config.policy(), config.origin());
+    let rules = write::Rules {
+        opted_in: config.present,
+        policy: policy.as_ref(),
+        origin: origin.as_ref(),
+    };
     let mut out = std::io::stdout().lock();
     match cli.command {
         Command::Tree {
@@ -184,6 +193,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 scheme.as_ref(),
                 config.policy().as_ref(),
                 config.links(),
+                config.origin().as_ref(),
             );
             if json {
                 writeln!(
@@ -204,6 +214,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::New {
             parent,
+            from,
             title,
             body_file,
             labels,
@@ -215,7 +226,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 .map_err(|_| format!("{} is not UTF-8", body_file.display()))?;
             let labels = write::split_labels(&labels);
             write::require_opt_in(config.present)?;
-            let made = write::new_item(&server()?, config.present, parent, &title, &text, &labels)?;
+            let made = write::new_item(&server()?, &rules, parent, from, &title, &text, &labels)?;
             if json {
                 writeln!(
                     out,
@@ -223,10 +234,17 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     serde_json::to_string_pretty(&write::new_json(&made))?
                 )?;
             } else {
-                match made.link {
-                    Some((p, c)) => writeln!(out, "#{c} under #{p}: {}", made.created.url)?,
-                    None => writeln!(out, "#{} (a root): {}", made.created.iid, made.created.url)?,
-                }
+                let place = made
+                    .link
+                    .map_or("(a root)".to_string(), |(p, _)| format!("under #{p}"));
+                let found = made
+                    .origin
+                    .map_or(String::new(), |f| format!(", from #{f}"));
+                writeln!(
+                    out,
+                    "#{} {place}{found}: {}",
+                    made.created.iid, made.created.url
+                )?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -237,7 +255,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             json,
         } => {
             write::require_opt_in(config.present)?;
-            let m = write::move_item(&server()?, config.present, item, to)?;
+            let m = write::move_item(&server()?, &rules, item, to)?;
             if json {
                 writeln!(
                     out,
@@ -290,7 +308,10 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 writeln!(
                     out,
                     "{}",
-                    serde_json::to_string_pretty(&roots::to_json(&found))?
+                    serde_json::to_string_pretty(&roots::to_json(
+                        &found,
+                        config.origin().as_ref()
+                    ))?
                 )?;
             } else {
                 for line in roots::render(&found) {

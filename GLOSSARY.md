@@ -24,6 +24,17 @@ _Avoid_: slice, follow-up, sub-issue, Task
 **Root**:
 An item with no Parent line.
 
+**Origin line**:
+An item's line `<word>: #N`, directly under its Parent line or else first: the item was found while working #N. The word is the repo's `origin_word`. It says nothing about what the item is part of (ADR-0003).
+_Avoid_: source line, related-to line
+
+**Origin**:
+The item an origin line names. An item is not part of its origin, and an origin's state does not depend on it.
+
+**Find**:
+An item with an origin line. With a Parent line it is part of that parent; without one it is a root.
+_Avoid_: follow-up (consumers use it for both), spin-off
+
 **Descendant**:
 A child, or a descendant of a child.
 
@@ -40,4 +51,4 @@ Where a tracker records the parent and how a tree is walked down.
 The rule for when an item may be closed or open against its descendants.
 
 **Repo config**:
-The file a consuming repo commits to say it uses gltree and which root label, relation scheme and state policy it takes.
+The file a consuming repo commits to say it uses gltree and which root label, relation scheme, state policy, link use and origin word it takes.

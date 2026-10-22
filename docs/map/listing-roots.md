@@ -13,7 +13,8 @@ How `gltree roots` lists the tracker's roots for tools that act on finished feat
   `--closed-since` / `--closed-until` on the UTC date of `closed_at` (its first ten characters),
   inclusive at both ends, implying closed.
 - The output carries `first_line` without a trailing CR, so a caller can read its own marker on
-  that line (a registration line, say) without fetching the body.
+  that line (a registration line, say) without fetching the body. `origin` is the number the
+  root's origin line names (ADR-0003), or null: a find that stands alone is a root of its own.
 - gltree knows no external tracker: label names and what to do with the roots are the caller's.
   The first callers are a weekly report and an unregistered-feature sweep.
 

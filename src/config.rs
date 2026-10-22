@@ -1,7 +1,7 @@
 //! The repo config: `.gltree.toml` at a consuming repo's root, saying it uses gltree and how.
 
 use crate::check::{EveryParent, Links, RootsOnly, StatePolicy};
-use crate::scheme::{ParentLine, RelationScheme};
+use crate::scheme::{OriginLine, ParentLine, RelationScheme};
 use crate::tracker::Error;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,8 @@ pub struct RepoConfig {
     pub state_policy: String,
     /// What the repo's links may join: `tree-only` or `shared` with related issues.
     pub links: String,
+    /// The word of the origin line, `<word>: #N`; a committed config must set it.
+    pub origin_word: Option<String>,
     /// Whether the repo committed a config file, which is what lets gltree write to its tracker.
     pub present: bool,
 }
@@ -30,6 +32,7 @@ struct File {
     relation_scheme: Option<String>,
     state_policy: Option<String>,
     links: Option<String>,
+    origin_word: Option<String>,
 }
 
 impl RepoConfig {
@@ -39,6 +42,7 @@ impl RepoConfig {
             relation_scheme: SCHEMES[0].into(),
             state_policy: POLICIES[0].into(),
             links: LINKS[0].into(),
+            origin_word: None,
             present: false,
         }
     }
@@ -68,6 +72,7 @@ impl RepoConfig {
             )?,
             state_policy: known("state_policy", f.state_policy, POLICIES, d.state_policy)?,
             links: known("links", f.links, LINKS, d.links)?,
+            origin_word: Some(origin_word(f.origin_word)?),
             present: true,
         })
     }
@@ -83,6 +88,11 @@ impl RepoConfig {
             "every-parent" => Box::new(EveryParent),
             _ => Box::new(RootsOnly),
         }
+    }
+
+    /// The origin line this repo writes; none without a config file.
+    pub fn origin(&self) -> Option<OriginLine> {
+        self.origin_word.as_deref().map(OriginLine::new)
     }
 
     pub fn links(&self) -> Links {
@@ -104,6 +114,21 @@ impl RepoConfig {
             Err(e) => Err(Error::Source(format!("{FILE}: {e}"))),
         }
     }
+}
+
+fn origin_word(w: Option<String>) -> Result<String, Error> {
+    let Some(w) = w else {
+        return Err(Error::Malformed(format!(
+            "{FILE}: `origin_word` is required: the word of the line `<word>: #N` that says where an item was found, e.g. origin_word = \"From\""
+        )));
+    };
+    let foreign = |c: char| c == ':' || c == '#' || c.is_whitespace();
+    if w.is_empty() || w == "Parent" || w.contains(foreign) {
+        return Err(Error::Malformed(format!(
+            "{FILE}: origin_word `{w}` must be one word, not `Parent`, without spaces, `:` or `#`"
+        )));
+    }
+    Ok(w)
 }
 
 fn toplevel(dir: &Path) -> Option<PathBuf> {
@@ -128,21 +153,41 @@ mod tests {
         assert!(!c.present);
     }
 
+    const WORD: &str = "origin_word = \"From\"\n";
+
+    fn with_word(rest: &str) -> String {
+        format!("{WORD}{rest}")
+    }
+
     #[test]
-    fn an_empty_file_opts_in_with_the_defaults() {
-        let c = RepoConfig::parse(Some("")).unwrap();
+    fn a_file_with_only_the_origin_word_opts_in_with_the_defaults() {
+        let c = RepoConfig::parse(Some(WORD)).unwrap();
         assert!(c.present);
         assert_eq!(
             (c.root_label.as_str(), c.state_policy.as_str()),
             ("SPEC", "roots-only")
         );
+        assert_eq!(c.origin(), Some(OriginLine::new("From")));
+        assert_eq!(RepoConfig::defaults().origin(), None);
+    }
+
+    #[test]
+    fn the_origin_word_is_required_and_one_word() {
+        let e = RepoConfig::parse(Some("")).unwrap_err().to_string();
+        assert!(e.contains("origin_word") && e.contains("required"), "{e}");
+        for bad in ["", "Parent", "Came from", "From:", "#", " From"] {
+            let text = format!("origin_word = \"{bad}\"");
+            assert!(RepoConfig::parse(Some(&text)).is_err(), "{bad:?}");
+        }
+        let c = RepoConfig::parse(Some("origin_word = \"출처\"")).unwrap();
+        assert_eq!(c.origin_word.as_deref(), Some("출처"));
     }
 
     #[test]
     fn each_value_can_be_set() {
-        let c = RepoConfig::parse(Some(
+        let c = RepoConfig::parse(Some(&with_word(
             "root_label = \"PRD\"\nrelation_scheme = \"parent-line\"\nstate_policy = \"roots-only\"\n",
-        ))
+        )))
         .unwrap();
         assert_eq!(c.root_label, "PRD");
     }
@@ -161,7 +206,7 @@ mod tests {
 
     #[test]
     fn every_parent_is_a_known_policy_and_unknown_ones_list_both() {
-        let c = RepoConfig::parse(Some("state_policy = \"every-parent\"")).unwrap();
+        let c = RepoConfig::parse(Some(&with_word("state_policy = \"every-parent\""))).unwrap();
         assert_eq!(c.state_policy, "every-parent");
         // the name reaches the policy itself: a closed non-root over an open child is judged
         use crate::check::Family;
@@ -193,7 +238,7 @@ mod tests {
     #[test]
     fn links_are_tree_only_unless_the_repo_shares_them() {
         assert_eq!(RepoConfig::parse(None).unwrap().links(), Links::TreeOnly);
-        let shared = RepoConfig::parse(Some("links = \"shared\"")).unwrap();
+        let shared = RepoConfig::parse(Some(&with_word("links = \"shared\""))).unwrap();
         assert_eq!(shared.links(), Links::Shared);
         let e = RepoConfig::parse(Some("links = \"any\""))
             .unwrap_err()

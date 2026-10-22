@@ -1,7 +1,7 @@
 //! Every way a tracker breaks the tree convention.
 
 use crate::item::{Item, State};
-use crate::scheme::{ParentLine, RelationScheme};
+use crate::scheme::{OriginLine, ParentLine, RelationScheme};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -86,6 +86,7 @@ pub fn check(
     scheme: &dyn RelationScheme,
     policy: &dyn StatePolicy,
     links: Links,
+    origin: Option<&OriginLine>,
 ) -> Vec<Finding> {
     let by: HashMap<u64, &Item> = items.iter().map(|it| (it.iid, it)).collect();
     let mut sorted: Vec<&Item> = items.iter().collect();
@@ -117,12 +118,32 @@ pub fn check(
                 "one Parent line, and only as the first line".into(),
             );
         }
+        let o = origin.and_then(|r| r.origin_of(&it.desc));
+        if let Some(r) = origin {
+            let origin_lines = it
+                .desc
+                .split('\n')
+                .filter(|l| r.parse_line(l).is_some())
+                .count();
+            if origin_lines > 1 || (origin_lines == 1 && o.is_none()) {
+                add(
+                    "origin-line",
+                    format!(
+                        "one {} line, and only under the Parent line or first",
+                        r.word
+                    ),
+                );
+            }
+        }
         if it.kind == "task" {
             add("task", "still a Task".into());
         }
         let p = scheme.parent_of(it);
         if let Some(p) = p.filter(|p| !by.contains_key(p)) {
             add("missing-parent", format!("#{p} does not exist"));
+        }
+        if let Some(o) = o.filter(|o| !by.contains_key(o)) {
+            add("missing-origin", format!("#{o} does not exist"));
         }
         if let (Some(line), Some(links)) = (first, &it.links)
             && !links.contains(&line)
@@ -132,20 +153,29 @@ pub fn check(
                 format!("no relates_to link to #{line}, so tree <root> misses it"),
             );
         }
+        if let (Some(o), Some(links)) = (o, &it.links)
+            && !links.contains(&o)
+        {
+            add(
+                "unlinked",
+                format!("no relates_to link to #{o}, its origin"),
+            );
+        }
         let strays = if links == Links::TreeOnly {
             it.link_ends()
         } else {
             &[]
         };
         for &l in strays.iter().filter(|l| **l > it.iid) {
-            let joined = p == Some(l)
-                || by
-                    .get(&l)
-                    .is_some_and(|o| scheme.parent_of(o) == Some(it.iid));
+            let names_it = |other: &Item| {
+                scheme.parent_of(other) == Some(it.iid)
+                    || origin.and_then(|r| r.origin_of(&other.desc)) == Some(it.iid)
+            };
+            let joined = p == Some(l) || o == Some(l) || by.get(&l).is_some_and(|x| names_it(x));
             if !joined {
                 add(
                     "stray-link",
-                    format!("the link to #{l} joins no parent and child"),
+                    format!("the link to #{l} joins no parent and child, nor an origin"),
                 );
             }
         }
@@ -212,14 +242,14 @@ mod tests {
     }
 
     fn kinds(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &ParentLine, &RootsOnly, Links::TreeOnly)
+        check(items, &ParentLine, &RootsOnly, Links::TreeOnly, None)
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
     }
 
     fn every(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &ParentLine, &EveryParent, Links::TreeOnly)
+        check(items, &ParentLine, &EveryParent, Links::TreeOnly, None)
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
@@ -274,6 +304,81 @@ mod tests {
     }
 
     use State::{Closed, Open};
+
+    fn with_origin(items: &[Item], links: Links) -> Vec<(&'static str, u64)> {
+        check(
+            items,
+            &ParentLine,
+            &EveryParent,
+            links,
+            Some(&OriginLine::new("From")),
+        )
+        .iter()
+        .map(|f| (f.kind, f.iid))
+        .collect()
+    }
+
+    #[test]
+    fn a_linked_find_does_not_hold_its_closed_origin_open() {
+        let items = [
+            item(1, Closed, "", &[2]),
+            item(2, Open, "From: #1 (found while measuring)\n\nx", &[1]),
+            item(3, Open, "", &[4]),
+            item(4, Open, "Parent: #3\nFrom: #1\n\ny", &[3, 1]),
+        ];
+        // #1 also links #4 as its origin
+        let mut items = items.to_vec();
+        items[0].links = Some(vec![2, 4]);
+        assert!(with_origin(&items, Links::TreeOnly).is_empty());
+    }
+
+    #[test]
+    fn an_origin_link_is_not_stray_but_any_other_still_is() {
+        let items = [
+            item(1, Open, "", &[2, 3]),
+            item(2, Open, "From: #1", &[1, 3]),
+            item(3, Open, "", &[1, 2]),
+        ];
+        assert_eq!(
+            with_origin(&items, Links::TreeOnly),
+            [("stray-link", 1), ("stray-link", 2)]
+        );
+    }
+
+    #[test]
+    fn an_origin_line_out_of_place_or_doubled() {
+        let items = [
+            item(1, Open, "", &[]),
+            item(2, Open, "x\nFrom: #1", &[]),
+            item(3, Open, "From: #1\nFrom: #1", &[]),
+            item(4, Open, "Parent: #1\n\nFrom: #1", &[]),
+        ];
+        let found = with_origin(&items, Links::Shared);
+        assert!(found.contains(&("origin-line", 2)), "{found:?}");
+        assert!(found.contains(&("origin-line", 3)), "{found:?}");
+        assert!(found.contains(&("origin-line", 4)), "{found:?}");
+    }
+
+    #[test]
+    fn an_origin_that_does_not_exist_or_is_not_linked() {
+        assert_eq!(
+            with_origin(&[item(2, Open, "From: #99", &[99])], Links::TreeOnly),
+            [("missing-origin", 2)]
+        );
+        assert_eq!(
+            with_origin(
+                &[item(1, Open, "", &[]), item(2, Open, "From: #1", &[])],
+                Links::TreeOnly
+            ),
+            [("unlinked", 2)]
+        );
+    }
+
+    #[test]
+    fn without_an_origin_word_an_origin_line_is_just_text() {
+        let items = [item(1, Open, "", &[]), item(2, Open, "x\nFrom: #1", &[])];
+        assert!(kinds(&items).is_empty());
+    }
 
     #[test]
     fn a_linked_tree_with_an_open_child_under_an_open_root_is_clean() {
@@ -340,7 +445,7 @@ mod tests {
             item(2, Open, "Parent: #1", &[1, 3]),
             item(3, Open, "Parent: #1", &[1, 2]),
         ];
-        assert!(check(&items, &ParentLine, &RootsOnly, Links::Shared).is_empty());
+        assert!(check(&items, &ParentLine, &RootsOnly, Links::Shared, None).is_empty());
     }
 
     #[test]

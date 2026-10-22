@@ -7,13 +7,19 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 ## Design model
 
 - Items by number; per item, findings in this order, matching the consumers' Python tool:
-  `parent-line`, `task`, `missing-parent`, `unlinked`, `stray-link`, `cycle`, then the state
-  policy's finding. Text: `{kind:<26} #N  detail`, then `N anomalies`; exit 1 when any.
+  `parent-line`, `origin-line`, `task`, `missing-parent`, `missing-origin`, `unlinked` (the
+  parent's, then the origin's), `stray-link`, `cycle`, then the state policy's finding. Text:
+  `{kind:<26} #N  detail`, then `N anomalies`; exit 1 when any.
 - `parent-line`: more than one line that parses as a Parent line, or one that is not the first.
+- The origin line (ADR-0003) is read only under the repo's `origin_word`. `origin-line`: more than
+  one line that parses as one, or one not in its place (directly under the Parent line, else
+  first). An origin counts toward nobody's state: no policy sees it.
 - `unlinked` needs to know links were recorded: an item's `links` is `None` in a snapshot that
   never recorded them, and then nothing is reported.
 - `stray-link` is gltree's own, and only in a repo whose `links` is `tree-only` (ADR-0001). It is
-  reported once per pair, at the lower number.
+  reported once per pair, at the lower number. A link between an item and its origin is not
+  stray, so a repo that records finds keeps `tree-only` and with it the report of a child that
+  lost its Parent line.
 - `cycle` follows parents up from each item, so an item whose ancestors loop is reported along
   with the loop's members — as the Python tool does.
 - `check` hands every item, with whether it is a root and all its descendants, to the state
@@ -29,9 +35,10 @@ How `gltree check` reads every item and reports where the tracker breaks the con
   links overflow one page is an error, since `unlinked` and `stray-link` need every link.
 - The repo config `.gltree.toml` sits at `git rev-parse --show-toplevel`: `root_label` (default
   `SPEC`), `relation_scheme` (`parent-line`), `state_policy` (`roots-only`, or `every-parent`), `links` (`tree-only`,
-  or `shared` for a repo that also links related issues). Unknown keys and
-  unknown values fail, listing the known values. Absent file: defaults, and `present = false`,
-  which #5's write commands read as "this repo has not opted in".
+  or `shared` for a repo that also links related issues), and `origin_word`, required, with no
+  default: one word, not `Parent`, without spaces, `:` or `#`. Unknown keys and
+  unknown values fail, listing the known values. Absent file: defaults, no origin line, and
+  `present = false`, which #5's write commands read as "this repo has not opted in".
 
 ## Known holes / open
 

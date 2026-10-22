@@ -1,7 +1,7 @@
 //! The tracker's roots, filtered for tools that act on finished features.
 
 use crate::item::{Item, State};
-use crate::scheme::RelationScheme;
+use crate::scheme::{OriginLine, RelationScheme};
 use crate::tracker::Error;
 use serde_json::{Value, json};
 
@@ -121,7 +121,8 @@ pub fn render(roots: &[&Item]) -> Vec<String> {
         .collect()
 }
 
-pub fn to_json(roots: &[&Item]) -> Value {
+/// `origin` is the number the item's origin line names under the repo's word, or null.
+pub fn to_json(roots: &[&Item], origin: Option<&OriginLine>) -> Value {
     let list: Vec<Value> = roots
         .iter()
         .map(|it| {
@@ -133,6 +134,7 @@ pub fn to_json(roots: &[&Item]) -> Value {
                 "closed_at": it.closed_at,
                 "first_line": it.desc.split('\n').next().unwrap_or("").trim_end_matches('\r'),
                 "url": it.url,
+                "origin": origin.and_then(|r| r.origin_of(&it.desc)),
             })
         })
         .collect();
@@ -313,7 +315,18 @@ mod tests {
     #[test]
     fn the_first_line_of_a_crlf_body_has_no_cr() {
         let crlf = it(9, State::Closed, "NIT: PTR-9\r\nbody", &[], None);
-        assert_eq!(to_json(&[&crlf])["roots"][0]["first_line"], "NIT: PTR-9");
+        assert_eq!(
+            to_json(&[&crlf], None)["roots"][0]["first_line"],
+            "NIT: PTR-9"
+        );
+    }
+
+    #[test]
+    fn json_names_the_origin_under_the_repos_word() {
+        let found = it(9, State::Open, "From: #3 (x)\n\nbody", &[], None);
+        let o = OriginLine::new("From");
+        assert_eq!(to_json(&[&found], Some(&o))["roots"][0]["origin"], 3);
+        assert_eq!(to_json(&[&found], None)["roots"][0]["origin"], Value::Null);
     }
 
     #[test]
@@ -327,7 +340,7 @@ mod tests {
                 "#4 [open] closed:- labels:SPEC t4"
             ]
         );
-        let v = to_json(&picked);
+        let v = to_json(&picked, None);
         assert_eq!(v["version"], 1);
         assert_eq!(v["roots"][0]["first_line"], "NIT: PTR-1");
         assert_eq!(v["roots"][0]["closed_at"], "2026-10-19T23:59:59Z");
