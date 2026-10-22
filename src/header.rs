@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn with_header_keeps_the_body_byte_for_byte() {
-        let body = "\r\n설정 「외관」\r\nNIT: x\r\n";
+        let body = "\r\n설정 「외관」\r\nREG: x\r\n";
         let desc = format!("+++\nparent = 1\n+++\n{body}");
         assert_eq!(
             with_header(&desc, &h(Some(4))).unwrap(),
@@ -386,7 +386,7 @@ mod tests {
         );
         assert_eq!(
             with_header(&desc, &h(None)).unwrap(),
-            "설정 「외관」\r\nNIT: x\r\n"
+            "설정 「외관」\r\nREG: x\r\n"
         );
         assert_eq!(
             with_header("text", &h(Some(4))).unwrap(),

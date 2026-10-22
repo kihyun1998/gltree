@@ -94,7 +94,7 @@ enum Command {
         /// A label the root must carry; repeat for several
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// A label the root must not carry; a trailing `*` matches a prefix, as in `nit::*`
+        /// A label the root must not carry; a trailing `*` matches a prefix, as in `reg::*`
         #[arg(long = "without-label")]
         without: Vec<String>,
         /// Closed on or after this UTC date (YYYY-MM-DD); implies --closed

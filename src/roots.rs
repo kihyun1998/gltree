@@ -168,8 +168,8 @@ mod tests {
             it(
                 1,
                 State::Closed,
-                "NIT: PTR-1",
-                &["SPEC", "nit::registered"],
+                "REG: K-1",
+                &["SPEC", "reg::registered"],
                 Some("2026-10-19T23:59:59Z"),
             ),
             it(
@@ -191,14 +191,14 @@ mod tests {
                 5,
                 State::Closed,
                 "",
-                &["chore", "nit"],
+                &["chore", "reg"],
                 Some("2026-10-25T00:00:00Z"),
             ),
             it(
                 6,
                 State::Closed,
                 "",
-                &["xnit::y"],
+                &["xreg::y"],
                 Some("2026-10-26T00:00:00Z"),
             ),
         ]
@@ -253,7 +253,7 @@ mod tests {
         );
         assert_eq!(
             numbers(Filter {
-                labels: vec!["SPEC".into(), "nit::registered".into()],
+                labels: vec!["SPEC".into(), "reg::registered".into()],
                 ..Filter::default()
             }),
             [1]
@@ -264,14 +264,14 @@ mod tests {
     fn a_without_prefix_drops_any_label_that_starts_with_it_and_nothing_else() {
         assert_eq!(
             numbers(Filter {
-                without: vec!["nit::*".into()],
+                without: vec!["reg::*".into()],
                 ..Filter::default()
             }),
             [2, 4, 5, 6]
         );
-        assert!(label_matches("nit::*", "nit::skipped"));
-        assert!(!label_matches("nit::*", "nit"));
-        assert!(!label_matches("nit::*", "xnit::y"));
+        assert!(label_matches("reg::*", "reg::skipped"));
+        assert!(!label_matches("reg::*", "reg"));
+        assert!(!label_matches("reg::*", "xreg::y"));
         assert!(label_matches("bug", "bug") && !label_matches("bug", "bugs"));
     }
 
@@ -280,7 +280,7 @@ mod tests {
         let f = Filter {
             state: Some(State::Closed),
             labels: vec!["SPEC".into()],
-            without: vec!["nit::*".into()],
+            without: vec!["reg::*".into()],
             ..Filter::default()
         };
         assert_eq!(numbers(f), [2]);
@@ -358,13 +358,13 @@ mod tests {
         assert_eq!(
             render(&picked),
             [
-                "#1 [closed] closed:2026-10-19 labels:SPEC,nit::registered t1",
+                "#1 [closed] closed:2026-10-19 labels:SPEC,reg::registered t1",
                 "#4 [open] closed:- labels:SPEC t4"
             ]
         );
         let v = to_json(&picked);
         assert_eq!(v["version"], 2);
-        assert_eq!(v["roots"][0]["first_line"], "NIT: PTR-1");
+        assert_eq!(v["roots"][0]["first_line"], "REG: K-1");
         assert_eq!(v["roots"][0]["closed_at"], "2026-10-19T23:59:59Z");
         assert_eq!(v["roots"][1]["closed_at"], Value::Null);
         assert_eq!(v["roots"][1]["number"], 4);

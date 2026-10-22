@@ -102,7 +102,7 @@ Kinds: `header` (a block out of form, with the reason), `task`, `missing-parent`
 ## Roots
 
 ```sh
-gltree roots --closed --without-label "nit::*" --json      # finished features with no registration label
+gltree roots --closed --without-label "reg::*" --json      # finished features with no registration label
 gltree roots --closed-since 2026-10-19 --closed-until 2026-10-25 --label SPEC
 ```
 

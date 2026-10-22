@@ -9,7 +9,7 @@ How `gltree roots` lists the tracker's roots for tools that act on finished feat
   names a deleted item is not a root here; `tree` draws it as one so it is not lost, and
   `check` reports it as `missing-parent`.
 - Filters combine with AND: state; `--label`, every one present; `--without-label`, none present,
-  a trailing `*` matching a prefix (`nit::*` drops `nit::registered`, keeps `nit` and `xnit::y`);
+  a trailing `*` matching a prefix (`reg::*` drops `reg::registered`, keeps `reg` and `xreg::y`);
   `--closed-since` / `--closed-until` on the UTC date of `closed_at` (its first ten characters),
   inclusive at both ends, implying closed.
 - The JSON (version 2) carries `from` and `extra` from the header, so a caller reads its own
