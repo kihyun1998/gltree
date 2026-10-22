@@ -90,6 +90,8 @@ mod tests {
         a.kind = "task".into();
         a.labels = vec!["SPEC".into()];
         a.links = Some(vec![1]);
+        a.closed_at = Some("2026-10-21T03:34:56Z".into());
+        a.url = Some("https://gitlab.example.com/team/app/-/issues/2".into());
         let b = crate::item::Item::new(1, State::Open, "t1", "");
         let back = SnapshotFile::parse(&SnapshotFile::to_bytes(&[a.clone(), b.clone()])).unwrap();
         assert_eq!(back, vec![b, a]);

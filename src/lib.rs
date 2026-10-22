@@ -6,6 +6,7 @@ pub mod gitlab;
 pub mod item;
 pub mod login;
 pub mod remote;
+pub mod roots;
 pub mod scheme;
 pub mod snapshot;
 pub mod tracker;

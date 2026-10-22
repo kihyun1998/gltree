@@ -61,6 +61,18 @@ Kinds: `parent-line`, `task`, `missing-parent`, `unlinked`, `stray-link`, `cycle
 `closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
 `{"version": 1, "findings": [{kind, item, detail}]}`.
 
+## Roots
+
+```sh
+gltree roots --closed --without-label "nit::*" --json      # finished features with no registration label
+gltree roots --closed-since 2026-10-19 --closed-until 2026-10-25 --label SPEC
+```
+
+Lists items with no Parent line, filtered with AND: `--open` / `--closed`, `--label` (all of
+them), `--without-label` (none of them; a trailing `*` matches a prefix), and an inclusive UTC
+closing-date range that implies `--closed`. Text: `#N [state] closed:<date|-> labels:<a,b> title`.
+`--json` prints `{"version": 1, "roots": [{number, title, state, labels, closed_at, first_line, url}]}`.
+
 ## New
 
 ```sh

@@ -259,3 +259,38 @@ fn move_in_a_repo_without_a_repo_config_is_refused_before_reaching_the_server() 
         "{err}"
     );
 }
+
+#[test]
+fn roots_lists_only_items_without_a_parent_line_with_the_filters() {
+    let all = tree_text(&["roots", "--snapshot", FIXTURE]);
+    let numbers: Vec<&str> = all.lines().map(|l| l.split(' ').next().unwrap()).collect();
+    // #8 names a deleted parent and #14's Parent line is not its first line: only the first is a root
+    assert_eq!(numbers, ["#1", "#7", "#12", "#14", "#15"]);
+    let spec = tree_text(&[
+        "roots",
+        "--closed",
+        "--label",
+        "SPEC",
+        "--snapshot",
+        FIXTURE,
+    ]);
+    assert_eq!(spec, "");
+    let open_spec = tree_text(&["roots", "--open", "--label", "SPEC", "--snapshot", FIXTURE]);
+    assert!(
+        open_spec.starts_with("#1 [open] closed:- labels:SPEC "),
+        "{open_spec}"
+    );
+}
+
+#[test]
+fn a_date_filter_on_a_snapshot_without_closing_dates_says_so() {
+    let out = gltree(&[
+        "roots",
+        "--closed-since",
+        "2026-01-01",
+        "--snapshot",
+        FIXTURE,
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("closed_at"));
+}

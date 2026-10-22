@@ -320,7 +320,7 @@ pub fn page_query(project: &str, after: Option<&str>) -> String {
         .map(|a| format!(",after:{}", Value::String(a.into())))
         .unwrap_or_default();
     format!(
-        "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{iid title state workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{iid}}}}}}}}}}}}}}}}}}",
+        "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{iid}}}}}}}}}}}}}}}}}}",
         project = Value::String(project.into())
     )
 }
@@ -338,6 +338,8 @@ pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
             .and_then(Value::as_str)
             .unwrap_or("Issue")
             .to_lowercase();
+        item.closed_at = n["closedAt"].as_str().map(String::from);
+        item.url = n["webUrl"].as_str().map(String::from);
         let widgets: Vec<&Value> = n["widgets"].as_array().into_iter().flatten().collect();
         item.labels = widgets
             .iter()
@@ -447,6 +449,7 @@ mod tests {
         let data = json!({ "project": { "workItems": {
             "pageInfo": { "hasNextPage": false, "endCursor": "zzz" },
             "nodes": [{ "iid": "1", "title": "t1", "state": "CLOSED", "workItemType": { "name": "Issue" },
+                        "closedAt": "2026-10-21T03:34:56Z", "webUrl": "https://gitlab.example.com/team/app/-/issues/1",
                         "widgets": [{ "description": "" }] }] } } });
         let (items, next) = parse_page(&data).unwrap();
         assert_eq!(next, None);
@@ -454,6 +457,19 @@ mod tests {
             (items[0].kind.as_str(), items[0].links.clone()),
             ("issue", Some(vec![]))
         );
+        assert_eq!(items[0].closed_at.as_deref(), Some("2026-10-21T03:34:56Z"));
+        assert_eq!(
+            items[0].url.as_deref(),
+            Some("https://gitlab.example.com/team/app/-/issues/1")
+        );
+    }
+
+    #[test]
+    fn an_open_item_has_no_closed_at() {
+        let data = json!({ "project": { "workItems": { "pageInfo": { "hasNextPage": false }, "nodes": [{
+            "iid": "2", "title": "t2", "state": "OPEN", "closedAt": null, "workItemType": { "name": "Issue" },
+            "widgets": [] }] } } });
+        assert_eq!(parse_page(&data).unwrap().0[0].closed_at, None);
     }
 
     #[test]

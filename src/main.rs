@@ -2,8 +2,10 @@ use clap::{Parser, Subcommand};
 use gltree::check;
 use gltree::config::RepoConfig;
 use gltree::gitlab::GitLab;
+use gltree::item::State;
 use gltree::login;
 use gltree::remote::Remote;
+use gltree::roots;
 use gltree::snapshot::SnapshotFile;
 use gltree::tracker::Tracker;
 use gltree::tree;
@@ -74,6 +76,33 @@ enum Command {
         /// Make the item a root
         #[arg(long)]
         to_root: bool,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// The tracker's roots, filtered by state, labels and closing date
+    Roots {
+        /// Only open roots
+        #[arg(long, conflicts_with = "closed")]
+        open: bool,
+        /// Only closed roots
+        #[arg(long)]
+        closed: bool,
+        /// A label the root must carry; repeat for several
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// A label the root must not carry; a trailing `*` matches a prefix, as in `nit::*`
+        #[arg(long = "without-label")]
+        without: Vec<String>,
+        /// Closed on or after this UTC date (YYYY-MM-DD); implies --closed
+        #[arg(long, conflicts_with = "open")]
+        closed_since: Option<String>,
+        /// Closed on or before this UTC date (YYYY-MM-DD); implies --closed
+        #[arg(long, conflicts_with = "open")]
+        closed_until: Option<String>,
+        /// Read the tracker from a snapshot file instead of the server
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -228,6 +257,44 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     )?;
                 } else {
                     writeln!(out, "#{} is already {}; nothing written", m.iid, name(m.to))?;
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Roots {
+            open,
+            closed,
+            labels,
+            without,
+            closed_since,
+            closed_until,
+            snapshot,
+            json,
+        } => {
+            let filter = roots::Filter {
+                state: if open {
+                    Some(State::Open)
+                } else if closed {
+                    Some(State::Closed)
+                } else {
+                    None
+                },
+                labels,
+                without,
+                closed_since,
+                closed_until,
+            };
+            let items = source(snapshot)?.all_items()?;
+            let found = roots::roots(&items, scheme.as_ref(), &filter)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&roots::to_json(&found))?
+                )?;
+            } else {
+                for line in roots::render(&found) {
+                    writeln!(out, "{line}")?;
                 }
             }
             Ok(ExitCode::SUCCESS)

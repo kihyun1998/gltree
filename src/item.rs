@@ -33,6 +33,11 @@ pub struct Item {
     /// The other ends of this item's links; `None` when the source did not record links at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<u64>>,
+    /// When it was closed, as the server's UTC timestamp; `None` when open or not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 fn issue() -> String {
@@ -49,6 +54,8 @@ impl Item {
             desc: desc.into(),
             labels: vec![],
             links: None,
+            closed_at: None,
+            url: None,
         }
     }
 
