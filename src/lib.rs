@@ -5,6 +5,8 @@ pub mod config;
 pub mod gitlab;
 pub mod item;
 pub mod login;
+#[cfg(target_os = "macos")]
+pub mod macos_tls;
 pub mod remote;
 pub mod roots;
 pub mod scheme;

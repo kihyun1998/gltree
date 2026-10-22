@@ -6,6 +6,9 @@ use crate::tracker::{Created, Error, Linked, Tracker};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use ureq::Agent;
+// Every platform but macOS hands the configured CA to native-tls. macOS goes through the pinned
+// verifier in `macos_tls`, because Security.framework refuses a long-lived self-signed sheet.
+#[cfg(not(target_os = "macos"))]
 use ureq::tls::{PemItem, RootCerts, TlsConfig, TlsProvider, parse_pem};
 
 /// Item numbers per level request; with 100 linked items each it stays under GitLab's complexity cap.
@@ -19,31 +22,47 @@ pub struct GitLab {
 
 impl GitLab {
     pub fn new(login: Login, project: &str) -> Result<GitLab, Error> {
-        let mut config = Agent::config_builder().http_status_as_error(false);
-        if let Some(path) = &login.ca_cert {
-            let pem = std::fs::read(path)
-                .map_err(|e| Error::Source(format!("CA certificate {}: {e}", path.display())))?;
-            let certs: Vec<_> = parse_pem(&pem)
-                .filter_map(|item| match item {
-                    Ok(PemItem::Certificate(c)) => Some(c),
-                    _ => None,
-                })
-                .collect();
-            if certs.is_empty() {
-                return Err(Error::Source(format!(
-                    "no PEM certificate in {}",
-                    path.display()
-                )));
+        let config = Agent::config_builder().http_status_as_error(false);
+        let agent: Agent = match &login.ca_cert {
+            None => config.build().into(),
+            Some(path) => {
+                let pem = std::fs::read(path).map_err(|e| {
+                    Error::Source(format!("CA certificate {}: {e}", path.display()))
+                })?;
+
+                #[cfg(target_os = "macos")]
+                let agent = crate::macos_tls::agent(config.build(), &pem, path)?;
+
+                #[cfg(not(target_os = "macos"))]
+                let agent = {
+                    let certs: Vec<_> = parse_pem(&pem)
+                        .filter_map(|item| match item {
+                            Ok(PemItem::Certificate(c)) => Some(c),
+                            _ => None,
+                        })
+                        .collect();
+                    if certs.is_empty() {
+                        return Err(Error::Source(format!(
+                            "no PEM certificate in {}",
+                            path.display()
+                        )));
+                    }
+                    config
+                        .tls_config(
+                            TlsConfig::builder()
+                                .provider(TlsProvider::NativeTls)
+                                .root_certs(RootCerts::new_with_certs(&certs))
+                                .build(),
+                        )
+                        .build()
+                        .into()
+                };
+
+                agent
             }
-            config = config.tls_config(
-                TlsConfig::builder()
-                    .provider(TlsProvider::NativeTls)
-                    .root_certs(RootCerts::new_with_certs(&certs))
-                    .build(),
-            );
-        }
+        };
         Ok(GitLab {
-            agent: config.build().into(),
+            agent,
             login,
             project: project.into(),
         })
