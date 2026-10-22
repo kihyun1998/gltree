@@ -41,6 +41,13 @@ impl Header {
         *self == Header::default()
     }
 
+    /// Drops each note whose key the header no longer holds, so a write that empties a key never
+    /// leaves the header out of form.
+    pub fn drop_orphan_notes(&mut self) {
+        let keep: Vec<String> = self.notes.keys().filter(|k| self.has(k)).cloned().collect();
+        self.notes.retain(|k, _| keep.contains(k));
+    }
+
     /// Whether the header holds a value under the reference key `key`.
     pub fn has(&self, key: &str) -> bool {
         match key {

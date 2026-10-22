@@ -123,16 +123,34 @@ still open.
 ```sh
 gltree new --parent 12 --title "The drawer keeps its width" --body-file body.md --label bug,UI:Dialog
 gltree new --from 13 --title "Trailing space on the line" --body-file body.md   # found while working #13
+gltree new --parent 12 --related 30 --blocked-by 40 --title "…" --body-file body.md
 ```
 
 Creates an issue whose body is the header (`parent = 12`), a blank line, then `body.md` (UTF-8),
-and links it to #12, in one step. Without `--parent` it creates a root. `--from 13` adds
-`from = 13` and links #13. Only the labels passed are applied. It refuses, before writing anything,
-in a repo without `.gltree.toml`, when #12 or #13 does not exist, when `--from` names the parent,
-when `body.md` already opens with `+++`, or when #12 is closed and the state policy would then
-report it closed over an open item — reopen #12, or use `--from 12`. If the issue is created but a
-link fails, it names the issue and the links left to add, and exits 2. `--json` prints
-`{"version": 2, "created": {number, url}, "link": {parent, child} | null, "from": N | null}`.
+links it to every item its header names, and syncs the lists on the other ends — `children` on
+#12, `blocks` on #40, `related` on #30 — in one step. Without `--parent` it creates a root.
+`--from 13` adds `from = 13`; `--related` and `--blocked-by` repeat. Only the labels passed are
+applied. It refuses, before writing anything, in a repo without `.gltree.toml`, when a named item
+does not exist, when `--from` names the parent, when `body.md` already opens with `+++`, or when
+#12 is closed and the state policy would then report it closed over an open item — reopen #12, or
+use `--from 12`. If the issue is created but a later step fails, it names the issue and the steps
+left, in order, and exits 2. `--json` prints
+`{"version": 2, "created": {number, url}, "link": {parent, child} | null, "from": N | null, "related": [N], "blocked_by": [N]}`.
+
+## Edit
+
+```sh
+gltree edit 19 --add-related 30 --add-blocked-by 40
+gltree edit 19 --remove-related 30 --remove-blocked-by 40
+```
+
+Changes #19's `related` and `blocked_by`, with the links and the other ends: an added related item
+lists #19 back and an added blocker lists it under `blocks`; a removed related item is dropped on
+both ends, and a removed blocker's `blocks` is synced. A link goes only when no reference on either
+end still explains it, and a note goes with the key it explained. It refuses, before writing, a
+header out of form, #19 itself, a missing item to add, and a blocker that #19 already blocks at any
+depth; an edit that changes nothing writes nothing. `--json` prints
+`{"version": 1, "item", "related", "blocked_by", "changed"}`.
 
 ## Move
 
@@ -141,7 +159,9 @@ gltree move 19 --to 12      # #19's parent becomes #12; its old parent is unlink
 gltree move 19 --to-root    # the parent and the old link go; an empty header goes with them
 ```
 
-Only `parent` changes; the rest of the header and the body stay byte for byte. It refuses a header
+Only `parent` changes (and a note on it, when it goes); the rest of the header and the body stay
+byte for byte, and `children` is synced on both parents. The old link stays when another reference
+still explains it. It refuses a header
 out of form, a target that is #19's `from`, #19 or below it, or a closed target the state policy
 would then report, and says so and writes nothing when #19 already has that parent. Like `new`, it
 writes only in a repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`,

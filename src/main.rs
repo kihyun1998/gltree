@@ -57,6 +57,12 @@ enum Command {
         /// The item it was found while working, as `N` or `#N`: the header's `from`, not a parent
         #[arg(long, value_parser = parse_iid)]
         from: Option<u64>,
+        /// An item to list under `related`; repeat for several
+        #[arg(long, value_parser = parse_iid)]
+        related: Vec<u64>,
+        /// An item this one cannot start before; repeat for several
+        #[arg(long, value_parser = parse_iid)]
+        blocked_by: Vec<u64>,
         #[arg(long)]
         title: String,
         /// The body, a UTF-8 file; gltree writes the header above it
@@ -65,6 +71,23 @@ enum Command {
         /// A label to apply; repeat it, or separate labels with commas
         #[arg(long = "label")]
         labels: Vec<String>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add to or remove from an item's `related` and `blocked_by`, with the links and the other ends
+    Edit {
+        /// The item to edit, as `N` or `#N`
+        #[arg(value_parser = parse_iid)]
+        item: u64,
+        #[arg(long, value_parser = parse_iid)]
+        add_related: Vec<u64>,
+        #[arg(long, value_parser = parse_iid)]
+        remove_related: Vec<u64>,
+        #[arg(long, value_parser = parse_iid)]
+        add_blocked_by: Vec<u64>,
+        #[arg(long, value_parser = parse_iid)]
+        remove_blocked_by: Vec<u64>,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -228,6 +251,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::New {
             parent,
             from,
+            related,
+            blocked_by,
             title,
             body_file,
             labels,
@@ -239,7 +264,13 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 .map_err(|_| format!("{} is not UTF-8", body_file.display()))?;
             let labels = write::split_labels(&labels);
             write::require_opt_in(config.present)?;
-            let made = write::new_item(&server()?, &rules, parent, from, &title, &text, &labels)?;
+            let refs = write::Refs {
+                parent,
+                from,
+                related,
+                blocked_by,
+            };
+            let made = write::new_item(&server()?, &rules, &refs, &title, &text, &labels)?;
             if json {
                 writeln!(
                     out,
@@ -255,6 +286,47 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     out,
                     "#{} {place}{found}: {}",
                     made.created.iid, made.created.url
+                )?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Edit {
+            item,
+            add_related,
+            remove_related,
+            add_blocked_by,
+            remove_blocked_by,
+            json,
+        } => {
+            let edits = write::Edits {
+                add_related,
+                remove_related,
+                add_blocked_by,
+                remove_blocked_by,
+            };
+            if edits == write::Edits::default() {
+                return Err("edit needs at least one --add-* or --remove-* flag".into());
+            }
+            write::require_opt_in(config.present)?;
+            let e = write::edit_item(&server()?, &rules, item, &edits)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&write::edited_json(&e))?
+                )?;
+            } else {
+                let list = |ns: &[u64]| {
+                    let ns: Vec<String> = ns.iter().map(|n| format!("#{n}")).collect();
+                    format!("[{}]", ns.join(", "))
+                };
+                let verb = if e.changed { "now" } else { "already" };
+                writeln!(
+                    out,
+                    "#{} {verb} related {} blocked_by {}",
+                    e.iid,
+                    list(&e.related),
+                    list(&e.blocked_by)
                 )?;
             }
             Ok(ExitCode::SUCCESS)

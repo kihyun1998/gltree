@@ -63,13 +63,15 @@ pub trait Tracker {
 
 /// An in-memory tracker for tests and for callers that already hold the items.
 /// Its links are each item's `links`; `levels` records every `level` call and `writes` every
-/// write, as text; `fail_links` makes `add_link` fail and `fail_unlinks` `remove_link`.
+/// write, as text; `fail_links` makes `add_link` fail, `fail_unlinks` `remove_link`, and
+/// `fail_descs` every `set_desc` after the first that many succeed.
 pub struct FakeTracker {
     pub items: RefCell<Vec<Item>>,
     pub levels: RefCell<Vec<Vec<u64>>>,
     pub writes: RefCell<Vec<String>>,
     pub fail_links: Cell<bool>,
     pub fail_unlinks: Cell<bool>,
+    pub fail_descs: Cell<Option<usize>>,
 }
 
 impl FakeTracker {
@@ -80,6 +82,7 @@ impl FakeTracker {
             writes: RefCell::new(vec![]),
             fail_links: Cell::new(false),
             fail_unlinks: Cell::new(false),
+            fail_descs: Cell::new(None),
         }
     }
 
@@ -138,6 +141,12 @@ impl Tracker for FakeTracker {
     }
 
     fn set_desc(&self, iid: u64, desc: &str) -> Result<(), Error> {
+        if let Some(left) = self.fail_descs.get() {
+            if left == 0 {
+                return Err(Error::Server("edit refused".into()));
+            }
+            self.fail_descs.set(Some(left - 1));
+        }
         let mut items = self.items.borrow_mut();
         let it = items
             .iter_mut()
