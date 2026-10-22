@@ -5,6 +5,7 @@ use gltree::derived;
 use gltree::gitlab::GitLab;
 use gltree::item::State;
 use gltree::login;
+use gltree::migrate;
 use gltree::remote::Remote;
 use gltree::roots;
 use gltree::snapshot::SnapshotFile;
@@ -130,6 +131,27 @@ enum Command {
         /// Read the tracker from a snapshot file instead of the server
         #[arg(long)]
         snapshot: Option<PathBuf>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Turn a tracker written in the first-line format into headers; a dry run unless --apply
+    Migrate {
+        /// A word the old head used for `from`, beside `From`; repeat for several
+        #[arg(long)]
+        from_word: Vec<String>,
+        /// A word the old head used for `related`, beside `Related`; repeat for several
+        #[arg(long)]
+        related_word: Vec<String>,
+        /// Plan from a snapshot file instead of the server (a dry run only)
+        #[arg(long, conflicts_with = "apply")]
+        snapshot: Option<PathBuf>,
+        /// Save the tracker as it would read after the migration, as a snapshot, for `check`
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Write the plan to the server
+        #[arg(long)]
+        apply: bool,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -395,6 +417,44 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 )?;
             } else {
                 for line in roots::render(&found) {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Migrate {
+            from_word,
+            related_word,
+            snapshot,
+            out: save,
+            apply,
+            json,
+        } => {
+            if apply {
+                write::require_opt_in(config.present)?;
+            }
+            let mut words = migrate::Words::default();
+            words.from.extend(from_word);
+            words.related.extend(related_word);
+            let tracker = source(snapshot)?;
+            let items = tracker.all_items()?;
+            let plan = migrate::plan(&items, &words, &config.extra_keys)?;
+            if let Some(path) = save {
+                let after = migrate::applied(&items, &plan);
+                std::fs::write(&path, SnapshotFile::to_bytes(&after))
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+            if apply {
+                migrate::apply(tracker.as_ref(), &plan)?;
+            }
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&migrate::to_json(&plan, apply))?
+                )?;
+            } else {
+                for line in migrate::render(&plan, apply) {
                     writeln!(out, "{line}")?;
                 }
             }

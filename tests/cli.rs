@@ -297,6 +297,53 @@ fn sync_writes_only_with_a_repo_config_and_a_dry_run_needs_none() {
 }
 
 #[test]
+fn migrate_plans_from_a_snapshot_saves_the_result_and_the_result_checks_clean() {
+    let dir = std::env::temp_dir().join("gltree-migrate");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("old.json");
+    let new = dir.join("new.json");
+    std::fs::write(
+        &old,
+        r#"[{"iid": 1, "title": "a", "state": "open", "desc": "", "links": [2]},
+            {"iid": 2, "title": "b", "state": "open", "desc": "Parent: #1\n\nFrom: #3 (seen)\n\nbody", "links": [1]},
+            {"iid": 3, "title": "c", "state": "open", "desc": "", "links": []}]"#,
+    )
+    .unwrap();
+    let out = gltree(&[
+        "migrate",
+        "--snapshot",
+        old.to_str().unwrap(),
+        "--out",
+        new.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("  - Parent: #1") && text.contains("  + parent = 1"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("dry run: derived 1, from 1, items 2, links 1, notes 1, parent 1\n"),
+        "{text}"
+    );
+    let out = gltree(&["check", "--snapshot", new.to_str().unwrap()]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "0 anomalies\n");
+    let again = gltree(&["migrate", "--snapshot", new.to_str().unwrap()]);
+    assert!(
+        String::from_utf8(again.stdout)
+            .unwrap()
+            .ends_with("dry run: items 0, links 0\n")
+    );
+    let refused = gltree(&["migrate", "--snapshot", old.to_str().unwrap(), "--apply"]);
+    assert_eq!(refused.status.code(), Some(2));
+}
+
+#[test]
 fn roots_lists_only_items_without_a_parent_line_with_the_filters() {
     let all = tree_text(&["roots", "--snapshot", FIXTURE]);
     let numbers: Vec<&str> = all.lines().map(|l| l.split(' ').next().unwrap()).collect();

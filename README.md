@@ -167,6 +167,25 @@ would then report, and says so and writes nothing when #19 already has that pare
 writes only in a repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`,
 where `from` and `to` are the parent before and after.
 
+## Migrate
+
+```sh
+gltree migrate --snapshot tracker.json --out migrated.json   # plan offline, save the result
+gltree check --snapshot migrated.json                        # what check would say afterwards
+gltree migrate --from-word Origin --apply                    # write it to the server
+```
+
+Turns a tracker written in the first-line format into headers. The old head is the key lines at
+the top of a body, blank lines between them allowed: `Parent: #N`, `From: #N` (and each
+`--from-word`), `Related: #N, #M` (and each `--related-word`), `Blocked by` / `Depends on`, and a
+line whose key is a declared extra key (`NIT:` for `extra_keys = ["nit"]`). Text after the numbers
+becomes the key's note. The head ends at the first line that is none of these — a key line that
+names no issue number, such as `Blocked by: none`, stays in the body — and the body from there is
+kept byte for byte. Then every derived list is filled over the whole tracker, and every reference
+that lacks its link gets one. An item that already opens with a header is left alone, so a second
+run plans nothing. Dry run unless `--apply`; prints each item's old head (`-`) and new block (`+`),
+the links, and counts by kind. `--apply` needs `.gltree.toml` and the server.
+
 ## Sync
 
 ```sh
