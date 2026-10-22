@@ -1,8 +1,34 @@
 # gltree
 
-Issue trees for GitLab trackers where every item is an Issue and each names its parent on its
-body's first line, `Parent: #N` — the convention gltree owns ([ADR-0001](docs/adr/0001-the-parent-line-is-the-truth-and-links-are-the-way-down.md),
+Issue trees for GitLab trackers where every item is an Issue and each records its references —
+its parent above all — in a TOML header at the top of its body, the convention gltree owns
+([ADR-0004](docs/adr/0004-references-live-in-a-toml-header.md),
+[ADR-0001](docs/adr/0001-the-child-records-its-parent-and-links-are-the-way-down.md),
 [ADR-0002](docs/adr/0002-gltree-owns-the-tree-convention.md)). Vocabulary: [GLOSSARY.md](GLOSSARY.md).
+
+## The header
+
+```
++++
+parent = 12
+from = 8
+related = [30]
+blocked_by = [40]
+
+[notes]
+from = "found while reproducing over SSH"
++++
+
+The body …
+```
+
+The block opens the description, between `+++` lines; GitLab shows it as a box above the body. An
+item with no references has none. Numbers are integers without `#`; lists are ascending arrays with
+no number twice. `parent` says the item is part of #12; `from` says it was found while working #8
+and is not part of it ([ADR-0003](docs/adr/0003-where-an-item-was-found-is-not-what-it-is-part-of.md));
+`[notes]` holds one reason per reference key; `[extra]` holds the keys the repo config declares.
+gltree also writes `children` and `blocks` on the other end of a `parent` or `blocked_by`, and
+mirrors `related`. Any other key is refused.
 
 ## Install
 
@@ -69,8 +95,8 @@ unlinked                   #19  no relates_to link to #13, so tree <root> misses
 1 anomalies
 ```
 
-Kinds: `parent-line`, `origin-line`, `task`, `missing-parent`, `missing-origin`, `unlinked`,
-`stray-link`, `cycle`, `closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
+Kinds: `header` (a block out of form, with the reason), `task`, `missing-parent`, `unlinked`,
+`cycle`, `closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
 `{"version": 1, "findings": [{kind, item, detail}]}`.
 
 ## Roots
@@ -80,10 +106,11 @@ gltree roots --closed --without-label "nit::*" --json      # finished features w
 gltree roots --closed-since 2026-10-19 --closed-until 2026-10-25 --label SPEC
 ```
 
-Lists items with no Parent line, filtered with AND: `--open` / `--closed`, `--label` (all of
+Lists items with no `parent`, filtered with AND: `--open` / `--closed`, `--label` (all of
 them), `--without-label` (none of them; a trailing `*` matches a prefix), and an inclusive UTC
 closing-date range that implies `--closed`. Text: `#N [state] closed:<date|-> labels:<a,b> title`.
-`--json` prints `{"version": 1, "roots": [{number, title, state, labels, closed_at, first_line, url, origin}]}`.
+`--json` prints `{"version": 2, "roots": [{number, title, state, labels, closed_at, first_line, url, from, extra}]}`,
+where `first_line` is the body's first line after the header.
 
 ## New
 
@@ -92,39 +119,37 @@ gltree new --parent 12 --title "The drawer keeps its width" --body-file body.md 
 gltree new --from 13 --title "Trailing space on the line" --body-file body.md   # found while working #13
 ```
 
-Creates an issue whose body is `Parent: #12`, a blank line, then `body.md` (UTF-8), and links it
-to #12, in one step. Without `--parent` it creates a root. `--from 13` adds the origin line
-`<origin_word>: #13` (under the Parent line, if any) and links #13: the issue was found while
-working #13 and is not part of it ([ADR-0003](docs/adr/0003-where-an-item-was-found-is-not-what-it-is-part-of.md)).
-Only the labels passed are applied.
-It refuses, before writing anything, in a repo without `.gltree.toml`, when #12 or #13 does not
-exist, when `body.md` already opens with a `Parent:` or origin line, or when #12 is closed and the
-state policy would then report it closed over an open item — reopen #12, or use `--from 12`. If
-the issue is created but a link fails, it names the issue and the links left to add, and exits 2.
-`--json` prints `{"version": 1, "created": {number, url}, "link": {parent, child} | null, "origin": N | null}`.
+Creates an issue whose body is the header (`parent = 12`), a blank line, then `body.md` (UTF-8),
+and links it to #12, in one step. Without `--parent` it creates a root. `--from 13` adds
+`from = 13` and links #13. Only the labels passed are applied. It refuses, before writing anything,
+in a repo without `.gltree.toml`, when #12 or #13 does not exist, when `--from` names the parent,
+when `body.md` already opens with `+++`, or when #12 is closed and the state policy would then
+report it closed over an open item — reopen #12, or use `--from 12`. If the issue is created but a
+link fails, it names the issue and the links left to add, and exits 2. `--json` prints
+`{"version": 2, "created": {number, url}, "link": {parent, child} | null, "from": N | null}`.
 
 ## Move
 
 ```sh
-gltree move 19 --to 12      # #19's Parent line becomes `Parent: #12`; its old parent is unlinked, #12 linked
-gltree move 19 --to-root    # the Parent line (and the blank line under it) and the old link go
+gltree move 19 --to 12      # #19's parent becomes #12; its old parent is unlinked, #12 linked
+gltree move 19 --to-root    # the parent and the old link go; an empty header goes with them
 ```
 
-Every other line of the body stays byte for byte, and an origin line stays directly under the
-Parent line. It refuses a target that is #19 or below it, or a closed target the state policy
-would then report, and says so and writes nothing when #19 already has that parent. Like `new`, it writes only in a
-repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`.
+Only `parent` changes; the rest of the header and the body stay byte for byte. It refuses a header
+out of form, a target that is #19's `from`, #19 or below it, or a closed target the state policy
+would then report, and says so and writes nothing when #19 already has that parent. Like `new`, it
+writes only in a repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`,
+where `from` and `to` are the parent before and after.
 
 ## Repo config
 
-A consuming repo commits `.gltree.toml` at its root; every key but `origin_word` is optional:
+A consuming repo commits `.gltree.toml` at its root; every key is optional:
 
 ```toml
-origin_word = "From"              # required: the origin line is `From: #N`; one word, not `Parent`
 root_label = "SPEC"
-relation_scheme = "parent-line"   # known: parent-line
+relation_scheme = "front-matter"  # known: front-matter
 state_policy = "roots-only"       # or "every-parent": every parent stays open while a child is open
-links = "tree-only"               # or "shared": links also join related issues, no stray-link
+extra_keys = ["marker"]           # keys the header's [extra] may hold, kept as written
 ```
 
 Exit status: 0 on success, 1 when `check` finds anything, 2 on a usage, input, config or server error.

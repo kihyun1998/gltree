@@ -1,8 +1,9 @@
-//! gltree: issue trees for GitLab trackers whose parent is the body's first line `Parent: #N`.
+//! gltree: issue trees for GitLab trackers whose references sit in a TOML header at the top of each body.
 
 pub mod check;
 pub mod config;
 pub mod gitlab;
+pub mod header;
 pub mod item;
 pub mod login;
 #[cfg(target_os = "macos")]

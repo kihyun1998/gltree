@@ -12,5 +12,5 @@ that repo's committed config file.
 The Python tools are deleted from the consuming repos once gltree's `tree` and `check` match
 their output on the live server. The consumers keep their own state rules through the repo
 config (`roots-only`, or `every-parent` where every parent stays open while a child is open). A
-find is recorded with an origin line rather than a Parent line (ADR-0003), so `Parent:` means
-"part of" wherever gltree reads it.
+find is recorded under `from` rather than `parent` (ADR-0003), so `parent` means "part of"
+wherever gltree reads it.

@@ -1,20 +1,23 @@
-//! Writing the tree: a new item with its Parent line, origin line and links in one step.
+//! Writing the tree: a new item with its header and links in one step, and moving an item.
 
 use crate::check::{Family, StatePolicy};
+use crate::header::{self, Header};
 use crate::item::{Item, State};
-use crate::scheme::{OriginLine, ParentLine};
+use crate::scheme::FrontMatter;
 use crate::tracker::{Created, Error, Tracker};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
-/// The version of the JSON shape `new_json` prints.
+/// The version of the JSON shape `moved_json` prints.
 pub const JSON_VERSION: u32 = 1;
+/// The version of the JSON shape `new_json` prints.
+pub const NEW_JSON_VERSION: u32 = 2;
 
-/// What a write must respect: the repo's opt-in, its state policy and its origin line.
+/// What a write must respect: the repo's opt-in, its state policy and its declared extra keys.
 pub struct Rules<'a> {
     pub opted_in: bool,
     pub policy: &'a dyn StatePolicy,
-    pub origin: Option<&'a OriginLine>,
+    pub extra_keys: &'a [String],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,28 +26,7 @@ pub struct New {
     /// `(parent, child)` when the item has a parent.
     pub link: Option<(u64, u64)>,
     /// The item it was found while working, when one was given.
-    pub origin: Option<u64>,
-}
-
-/// The body gltree writes: `Parent: #P`, a blank line, then `text`; `text` alone for a root.
-pub fn body_with_parent(parent: Option<u64>, text: &str) -> String {
-    body_with(parent, None, text)
-}
-
-/// `Parent: #P`, then `<word>: #F`, then a blank line and `text`, each line only when given.
-pub fn body_with(parent: Option<u64>, origin: Option<(&OriginLine, u64)>, text: &str) -> String {
-    let mut head = Vec::new();
-    if let Some(p) = parent {
-        head.push(format!("Parent: #{p}"));
-    }
-    if let Some((r, f)) = origin {
-        head.push(format!("{}: #{f}", r.word));
-    }
-    match (head.is_empty(), text.is_empty()) {
-        (true, _) => text.into(),
-        (false, true) => head.join("\n"),
-        (false, false) => format!("{}\n\n{text}", head.join("\n")),
-    }
+    pub from: Option<u64>,
 }
 
 /// Refuses to hang `top`, with `below` (itself and what hangs under it), under `p` when the
@@ -62,7 +44,7 @@ fn refuse_closed_above(
         let Some(above) = tracker.level(&[a])?.remove(&a) else {
             break;
         };
-        let up = ParentLine::parse(&above.item.desc);
+        let up = header::parent_of(&above.item.desc);
         let direct = [top];
         let family = Family {
             is_root: up.is_none(),
@@ -101,10 +83,10 @@ pub fn require_opt_in(opted_in: bool) -> Result<(), Error> {
     )))
 }
 
-/// Creates an item under `parent` (a root when `None`), found while working `from`, and links it
-/// to each. Refuses before any write when the repo has not opted in, `parent` or `from` does not
-/// exist, `text` already opens with a Parent or origin line, or `parent` is closed where the
-/// policy would then report it.
+/// Creates an item under `parent` (a root when `None`), found while working `from`, with its
+/// header above `text`, and links it to each. Refuses before any write when the repo has not
+/// opted in, `parent` or `from` does not exist, `from` is `parent`, `text` already opens with a
+/// header, or `parent` is closed where the policy would then report it.
 pub fn new_item(
     tracker: &dyn Tracker,
     rules: &Rules,
@@ -115,30 +97,17 @@ pub fn new_item(
     labels: &[String],
 ) -> Result<New, Error> {
     require_opt_in(rules.opted_in)?;
-    if ParentLine::parse(text).is_some() {
-        return Err(Error::Refused(
-            "the body already opens with a Parent line; drop it, gltree writes the line from --parent".into(),
-        ));
-    }
-    if let Some(r) = rules.origin
-        && r.parse_line(text.split('\n').next().unwrap_or(""))
-            .is_some()
-    {
+    if text.starts_with(header::FENCE) {
         return Err(Error::Refused(format!(
-            "the body already opens with a {} line; drop it, gltree writes the line from --from",
-            r.word
+            "the body already opens with `{}`; drop the header, gltree writes it from --parent and --from",
+            header::FENCE
         )));
     }
-    let origin = match (from, rules.origin) {
-        (Some(f), Some(r)) => Some((r, f)),
-        (Some(_), None) => {
-            return Err(Error::Refused(
-                "this repo's config names no origin_word, so there is no origin line to write"
-                    .into(),
-            ));
-        }
-        (None, _) => None,
-    };
+    if from.is_some() && from == parent {
+        return Err(Error::Refused(
+            "--from names the parent; an item found while working its own parent is part of it, so give --parent alone".into(),
+        ));
+    }
     let wanted: Vec<u64> = parent.into_iter().chain(from).collect();
     if !wanted.is_empty() {
         let found = tracker.level(&wanted)?;
@@ -151,12 +120,15 @@ pub fn new_item(
         let alternative = format!("give the new item --from {p} instead of --parent");
         refuse_closed_above(tracker, rules.policy, p, &new, &[&new], &alternative)?;
     }
-    let created = tracker.create_item(title, &body_with(parent, origin, text), labels)?;
+    let h = Header {
+        parent,
+        from,
+        ..Header::default()
+    };
+    let body = header::with_header(text, &h).map_err(Error::Refused)?;
+    let created = tracker.create_item(title, &body, labels)?;
     let c = created.iid;
-    let targets: Vec<u64> = parent
-        .into_iter()
-        .chain(from.filter(|f| Some(*f) != parent))
-        .collect();
+    let targets: Vec<u64> = parent.into_iter().chain(from).collect();
     for (i, &n) in targets.iter().enumerate() {
         if let Err(e) = tracker.add_link(n, c) {
             let left: Vec<String> = targets[i..]
@@ -173,7 +145,7 @@ pub fn new_item(
     Ok(New {
         created,
         link: parent.map(|p| (p, c)),
-        origin: from,
+        from,
     })
 }
 
@@ -183,10 +155,10 @@ pub fn new_json(n: &New) -> Value {
         .map(|(p, c)| json!({ "parent": p, "child": c }))
         .unwrap_or(Value::Null);
     json!({
-        "version": JSON_VERSION,
+        "version": NEW_JSON_VERSION,
         "created": { "number": n.created.iid, "url": n.created.url },
         "link": link,
-        "origin": n.origin,
+        "from": n.from,
     })
 }
 
@@ -199,45 +171,10 @@ pub struct Moved {
     pub changed: bool,
 }
 
-/// `desc` with its parent set to `to`: the first line replaced or a Parent line added, with a
-/// blank line under it unless an origin line follows; for `None`, the Parent line and the one
-/// blank line under it removed, an origin line taking its place.
-pub fn body_moved(desc: &str, to: Option<u64>, origin: Option<&OriginLine>) -> String {
-    if ParentLine::parse(desc).is_none() {
-        let first = desc.split('\n').next().unwrap_or("");
-        return match to {
-            Some(p) if origin.is_some_and(|r| r.parse_line(first).is_some()) => {
-                let eol = if first.ends_with('\r') { "\r\n" } else { "\n" };
-                format!("Parent: #{p}{eol}{desc}")
-            }
-            Some(_) => body_with_parent(to, desc),
-            None => desc.into(),
-        };
-    }
-    let (first, rest) = match desc.find('\n') {
-        Some(i) => (&desc[..i], &desc[i..]),
-        None => (desc, ""),
-    };
-    match to {
-        Some(p) => {
-            let cr = if first.ends_with('\r') { "\r" } else { "" };
-            format!("Parent: #{p}{cr}{rest}")
-        }
-        None => {
-            let rest = rest.strip_prefix('\n').unwrap_or(rest);
-            let rest = rest
-                .strip_prefix("\r\n")
-                .or_else(|| rest.strip_prefix('\n'))
-                .unwrap_or(rest);
-            rest.into()
-        }
-    }
-}
-
 /// Gives `n` the parent `to`, or makes it a root for `None`: the body first, then the new link,
-/// then the old link removed. Refuses before any write a repo that has not opted in, a missing
-/// item or parent, a parent that is `n` or below it, and a closed parent the policy would then
-/// report.
+/// then the old link removed. Only the header's `parent` changes. Refuses before any write a repo
+/// that has not opted in, a missing item or parent, a header out of form, a parent that is `n`'s
+/// `from`, `n` or below it, and a closed parent the policy would then report.
 pub fn move_item(
     tracker: &dyn Tracker,
     rules: &Rules,
@@ -250,7 +187,11 @@ pub fn move_item(
         .remove(&n)
         .ok_or(Error::NotFound(n))?
         .item;
-    let from = ParentLine::parse(&item.desc);
+    let mut h = header::parse(&item.desc, rules.extra_keys)
+        .map_err(|e| Error::Refused(format!("#{n}'s header is out of form ({e}); fix it first")))?
+        .header
+        .unwrap_or_default();
+    let from = h.parent;
     if from == to {
         return Ok(Moved {
             iid: n,
@@ -260,7 +201,12 @@ pub fn move_item(
         });
     }
     if let Some(p) = to {
-        let below = crate::tree::subtree(tracker, &ParentLine, n)?;
+        if h.from == Some(p) {
+            return Err(Error::Refused(format!(
+                "#{p} is #{n}'s `from`; drop it before making #{p} its parent"
+            )));
+        }
+        let below = crate::tree::subtree(tracker, &FrontMatter, n)?;
         if below.iter().any(|it| it.iid == p) {
             return Err(Error::Refused(format!(
                 "#{p} is #{n} or below it; moving #{n} there would make a cycle"
@@ -270,7 +216,7 @@ pub fn move_item(
             return Err(Error::NotFound(p));
         }
         let below: Vec<&Item> = below.iter().collect();
-        let alternative = format!("record #{p} as #{n}'s origin instead");
+        let alternative = format!("record #{p} as #{n}'s `from` instead");
         refuse_closed_above(tracker, rules.policy, p, &item, &below, &alternative)?;
     }
     let mut left = Vec::new();
@@ -280,11 +226,13 @@ pub fn move_item(
     if let Some(f) = from {
         left.push(format!("unlink #{f} and #{n}"));
     }
-    tracker.set_desc(n, &body_moved(&item.desc, to, rules.origin))?;
+    h.parent = to;
+    let body = header::with_header(&item.desc, &h).map_err(Error::Refused)?;
+    tracker.set_desc(n, &body)?;
     let unfinished = |done: usize, e: Error| {
         Error::Unfinished(format!(
-            "#{n}'s Parent line now names {}, but a link step failed ({e}); left to do: {}",
-            to.map_or("no parent".into(), |p| format!("#{p}")),
+            "#{n}'s header now names {}, but a link step failed ({e}); left to do: {}",
+            to.map_or("no parent".into(), |p| format!("#{p} as its parent")),
             left[done..].join(", then ")
         ))
     };
@@ -313,16 +261,16 @@ mod tests {
     use super::*;
     use crate::tracker::FakeTracker;
 
-    fn from() -> OriginLine {
-        OriginLine::new("From")
+    /// A body whose header names `n` as the parent.
+    fn p(n: u64) -> String {
+        format!("+++\nparent = {n}\n+++\n")
     }
 
     fn rules(opted_in: bool) -> Rules<'static> {
-        static FROM: std::sync::OnceLock<OriginLine> = std::sync::OnceLock::new();
         Rules {
             opted_in,
             policy: &crate::check::RootsOnly,
-            origin: Some(FROM.get_or_init(from)),
+            extra_keys: &[],
         }
     }
 
@@ -336,8 +284,17 @@ mod tests {
         l.iter().map(|s| s.to_string()).collect()
     }
 
+    fn clean(t: &FakeTracker) -> Vec<crate::check::Finding> {
+        crate::check::check(
+            &t.all_items().unwrap(),
+            &FrontMatter,
+            &crate::check::RootsOnly,
+            &[],
+        )
+    }
+
     #[test]
-    fn a_child_is_created_with_its_parent_line_then_linked_in_that_order() {
+    fn a_child_is_created_with_its_header_then_linked_in_that_order() {
         let t = tracker();
         let n = new_item(
             &t,
@@ -359,26 +316,13 @@ mod tests {
         );
         assert_eq!(
             t.item(2).unwrap().desc,
-            "Parent: #1\n\n설정 「외관」\r\nbody"
+            "+++\nparent = 1\n+++\n\n설정 「외관」\r\nbody"
         );
+        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
     }
 
     #[test]
-    fn the_new_child_passes_check() {
-        let t = tracker();
-        new_item(&t, &rules(true), Some(1), None, "A child", "x", &[]).unwrap();
-        let found = crate::check::check(
-            &t.all_items().unwrap(),
-            &ParentLine,
-            &crate::check::RootsOnly,
-            crate::check::Links::TreeOnly,
-            Some(&from()),
-        );
-        assert!(found.is_empty(), "{found:?}");
-    }
-
-    #[test]
-    fn without_a_parent_it_is_a_root_with_no_link() {
+    fn without_a_parent_or_from_it_is_a_root_with_no_header_and_no_link() {
         let t = tracker();
         let n = new_item(&t, &rules(true), None, None, "Alone", "text", &[]).unwrap();
         assert_eq!(n.link, None);
@@ -387,17 +331,18 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_body_is_the_header_alone() {
+        let t = tracker();
+        new_item(&t, &rules(true), Some(1), None, "x", "", &[]).unwrap();
+        assert_eq!(t.item(2).unwrap().desc, p(1));
+    }
+
+    #[test]
     fn labels_repeat_or_split_on_commas_and_blanks_drop() {
         assert_eq!(
             split_labels(&labels(&["bug, UI:Dialog", "ready-for-agent", " ", ""])),
             labels(&["bug", "UI:Dialog", "ready-for-agent"])
         );
-    }
-
-    #[test]
-    fn an_empty_body_is_the_parent_line_alone() {
-        assert_eq!(body_with_parent(Some(7), ""), "Parent: #7");
-        assert_eq!(body_with_parent(None, ""), "");
     }
 
     #[test]
@@ -421,10 +366,18 @@ mod tests {
     }
 
     #[test]
-    fn a_body_that_already_opens_with_a_parent_line_is_refused() {
+    fn a_body_that_already_opens_with_a_header_is_refused() {
         let t = tracker();
-        let r = new_item(&t, &rules(true), Some(1), None, "x", "Parent: #1\n\ny", &[]);
-        assert!(matches!(r, Err(Error::Refused(m)) if m.contains("Parent")));
+        let r = new_item(
+            &t,
+            &rules(true),
+            Some(1),
+            None,
+            "x",
+            &format!("{}\ny", p(1)),
+            &[],
+        );
+        assert!(matches!(r, Err(Error::Refused(m)) if m.contains("+++")));
         assert!(t.writes.borrow().is_empty());
     }
 
@@ -435,10 +388,7 @@ mod tests {
         let e = new_item(&t, &rules(true), Some(1), None, "x", "y", &[]).unwrap_err();
         let m = e.to_string();
         assert!(matches!(e, Error::Unfinished(_)), "{m}");
-        assert!(
-            m.contains("#2") && m.contains("#1") && m.contains("link"),
-            "{m}"
-        );
+        assert!(m.ends_with("left to do: link #1 and #2"), "{m}");
     }
 
     fn tree3() -> FakeTracker {
@@ -449,26 +399,16 @@ mod tests {
                 2,
                 State::Open,
                 "t2",
-                "Parent: #1\n\nBlocked by: #4\nNIT: skipped\nbody",
+                "+++\nparent = 1\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody",
             ),
-            Item::new(3, State::Open, "t3", "Parent: #2"),
+            Item::new(3, State::Open, "t3", &p(2)),
             Item::new(4, State::Open, "t4", "lone"),
         ];
-        let links = [vec![2], vec![1, 3], vec![2], vec![]];
+        let links = [vec![2], vec![1, 3, 4], vec![2], vec![2]];
         for (it, l) in items.iter_mut().zip(links) {
             it.links = Some(l);
         }
         FakeTracker::new(items)
-    }
-
-    fn clean(t: &FakeTracker) -> Vec<crate::check::Finding> {
-        crate::check::check(
-            &t.all_items().unwrap(),
-            &ParentLine,
-            &crate::check::RootsOnly,
-            crate::check::Links::TreeOnly,
-            Some(&from()),
-        )
     }
 
     #[test]
@@ -480,31 +420,32 @@ mod tests {
         assert_eq!(writes, ["desc #2", "link #4 #2", "unlink #1 #2"]);
         assert_eq!(
             t.item(2).unwrap().desc,
-            "Parent: #4\n\nBlocked by: #4\nNIT: skipped\nbody"
+            "+++\nparent = 4\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody"
         );
         assert!(clean(&t).is_empty(), "{:?}", clean(&t));
     }
 
     #[test]
-    fn a_root_moves_under_a_parent_with_the_line_new_writes() {
+    fn a_root_moves_under_a_parent_with_the_header_new_writes() {
         let t = tree3();
         move_item(&t, &rules(true), 4, Some(3)).unwrap();
-        assert_eq!(t.item(4).unwrap().desc, "Parent: #3\n\nlone");
+        assert_eq!(t.item(4).unwrap().desc, format!("{}\nlone", p(3)));
         assert_eq!(*t.writes.borrow(), ["desc #4", "link #3 #4"]);
         assert!(clean(&t).is_empty(), "{:?}", clean(&t));
     }
 
     #[test]
-    fn to_root_drops_the_line_and_its_blank_line_and_the_old_link_only() {
+    fn to_root_keeps_the_rest_of_the_header_and_drops_a_header_left_empty() {
         let t = tree3();
         let m = move_item(&t, &rules(true), 2, None).unwrap();
         assert_eq!((m.from, m.to), (Some(1), None));
         assert_eq!(
             t.item(2).unwrap().desc,
-            "Blocked by: #4\nNIT: skipped\nbody"
+            "+++\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody"
         );
         assert_eq!(*t.writes.borrow(), ["desc #2", "unlink #1 #2"]);
-        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+        move_item(&t, &rules(true), 3, None).unwrap();
+        assert_eq!(t.item(3).unwrap().desc, "");
     }
 
     #[test]
@@ -517,69 +458,54 @@ mod tests {
     }
 
     #[test]
-    fn a_crlf_first_line_keeps_its_line_ending() {
-        assert_eq!(
-            body_moved("Parent: #1\r\n\r\nx", Some(4), None),
-            "Parent: #4\r\n\r\nx"
-        );
-        assert_eq!(body_moved("Parent: #1\r\n\r\nx", None, None), "x");
-        assert_eq!(body_moved("Parent: #1", None, None), "");
-        assert_eq!(body_moved("Parent: #1\nx", None, None), "x");
+    fn a_header_out_of_form_is_refused_before_any_write() {
+        let t = tree3();
+        t.items.borrow_mut()[3].desc = "+++\nparnet = 1\n+++\n".into();
+        let m = move_item(&t, &rules(true), 4, Some(1))
+            .unwrap_err()
+            .to_string();
+        assert!(m.contains("parnet") && m.contains("fix it first"), "{m}");
+        assert!(t.writes.borrow().is_empty());
     }
 
     #[test]
-    fn the_origin_line_stays_directly_under_the_parent_line() {
-        let o = from();
-        assert_eq!(
-            body_moved("From: #9 (x)\n\nbody", Some(4), Some(&o)),
-            "Parent: #4\nFrom: #9 (x)\n\nbody"
-        );
-        assert_eq!(
-            body_moved("From: #9\r\n\r\nbody", Some(4), Some(&o)),
-            "Parent: #4\r\nFrom: #9\r\n\r\nbody"
-        );
-        assert_eq!(
-            body_moved("Parent: #4\nFrom: #9\n\nbody", None, Some(&o)),
-            "From: #9\n\nbody"
-        );
-        assert_eq!(
-            body_moved("Parent: #4\nFrom: #9\n\nbody", Some(5), Some(&o)),
-            "Parent: #5\nFrom: #9\n\nbody"
-        );
-    }
-
-    #[test]
-    fn a_find_is_created_with_its_origin_line_and_both_links() {
+    fn a_find_is_created_with_from_in_its_header_and_both_links() {
         let t = tree3();
         let n = new_item(&t, &rules(true), Some(4), Some(2), "found", "body", &[]).unwrap();
-        assert_eq!((n.link, n.origin), (Some((4, 5)), Some(2)));
-        assert_eq!(t.item(5).unwrap().desc, "Parent: #4\nFrom: #2\n\nbody");
+        assert_eq!((n.link, n.from), (Some((4, 5)), Some(2)));
+        assert_eq!(
+            t.item(5).unwrap().desc,
+            "+++\nparent = 4\nfrom = 2\n+++\n\nbody"
+        );
         assert_eq!(
             t.writes.borrow()[1..],
             ["link #4 #5".to_string(), "link #2 #5".to_string()]
         );
-        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
         let r = new_item(&t, &rules(true), None, Some(3), "alone", "", &[]).unwrap();
-        assert_eq!(t.item(r.created.iid).unwrap().desc, "From: #3");
-        assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+        assert_eq!(t.item(r.created.iid).unwrap().desc, "+++\nfrom = 3\n+++\n");
     }
 
     #[test]
-    fn a_body_opening_with_an_origin_line_or_a_missing_origin_is_refused() {
+    fn from_equal_to_parent_or_missing_is_refused_before_any_write() {
         let t = tree3();
         assert!(matches!(
-            new_item(&t, &rules(true), None, Some(2), "x", "From: #1\n\ny", &[]),
-            Err(Error::Refused(m)) if m.contains("From")
+            new_item(&t, &rules(true), Some(2), Some(2), "x", "y", &[]),
+            Err(Error::Refused(m)) if m.contains("--parent alone")
         ));
         assert!(matches!(
             new_item(&t, &rules(true), None, Some(99), "x", "y", &[]),
             Err(Error::NotFound(99))
         ));
+        t.items.borrow_mut()[3].desc = "+++\nfrom = 1\n+++\n".into();
+        assert!(matches!(
+            move_item(&t, &rules(true), 4, Some(1)),
+            Err(Error::Refused(m)) if m.contains("`from`")
+        ));
         assert!(t.writes.borrow().is_empty());
     }
 
     #[test]
-    fn a_failed_origin_link_leaves_only_that_link_to_do() {
+    fn a_failed_from_link_leaves_only_the_links_not_yet_made() {
         let t = tree3();
         t.fail_links.set(true);
         let m = new_item(&t, &rules(true), Some(4), Some(2), "x", "y", &[])
@@ -614,7 +540,7 @@ mod tests {
         let m = move_item(&t, &every_parent(), 4, Some(3))
             .unwrap_err()
             .to_string();
-        assert!(m.contains("#3 is closed") && m.contains("origin"), "{m}");
+        assert!(m.contains("#3 is closed") && m.contains("`from`"), "{m}");
         assert!(t.writes.borrow().is_empty());
         // roots-only lets a closed slice take a child, but not when its root is closed too
         assert!(new_item(&t, &rules(true), Some(3), None, "x", "y", &[]).is_ok());
@@ -663,7 +589,7 @@ mod tests {
             Err(Error::NotFound(99))
         ));
         assert!(matches!(
-            move_item(&t, &rules(true), 2, Some(99)),
+            move_item(&t, &rules(true), 3, Some(99)),
             Err(Error::NotFound(99))
         ));
         assert!(matches!(
@@ -680,7 +606,10 @@ mod tests {
         let e = move_item(&t, &rules(true), 2, Some(4)).unwrap_err();
         let m = e.to_string();
         assert!(matches!(e, Error::Unfinished(_)), "{m}");
-        assert!(m.contains("link #4 and #2") && m.contains("#1"), "{m}");
+        assert!(
+            m.ends_with("left to do: link #4 and #2, then unlink #1 and #2"),
+            "{m}"
+        );
     }
 
     #[test]
@@ -708,18 +637,18 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_the_item_and_the_link() {
+    fn json_reports_the_item_the_link_and_from() {
         let n = New {
             created: Created {
                 iid: 2,
                 url: "u".into(),
             },
             link: Some((1, 2)),
-            origin: None,
+            from: None,
         };
         assert_eq!(
             new_json(&n),
-            json!({ "version": 1, "created": { "number": 2, "url": "u" }, "link": { "parent": 1, "child": 2 }, "origin": null })
+            json!({ "version": 2, "created": { "number": 2, "url": "u" }, "link": { "parent": 1, "child": 2 }, "from": null })
         );
         let root = New {
             created: Created {
@@ -727,9 +656,9 @@ mod tests {
                 url: "v".into(),
             },
             link: None,
-            origin: Some(9),
+            from: Some(9),
         };
         assert_eq!(new_json(&root)["link"], Value::Null);
-        assert_eq!(new_json(&root)["origin"], 9);
+        assert_eq!(new_json(&root)["from"], 9);
     }
 }

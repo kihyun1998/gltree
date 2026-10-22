@@ -6,7 +6,7 @@ level walk (`src/remote.rs`, `src/login.rs`, `src/gitlab.rs`, `subtree` in `src/
 ## Design model
 
 - **The walk.** `tree <N>` asks one `level` per depth: the level's items and every item linked to
-  them, bodies included. A linked item joins the tree only when its own first line names the node
+  them, bodies included. A linked item joins the tree only when its own header names the node
   (ADR-0001); a link has no direction, so the parent itself and unrelated links come back too and
   are dropped. A global seen-set stops a cycle. Cost grows with the tree's depth and size, never
   with the tracker's.

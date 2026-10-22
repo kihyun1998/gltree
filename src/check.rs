@@ -1,7 +1,8 @@
 //! Every way a tracker breaks the tree convention.
 
+use crate::header;
 use crate::item::{Item, State};
-use crate::scheme::{OriginLine, ParentLine, RelationScheme};
+use crate::scheme::RelationScheme;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -72,21 +73,11 @@ impl StatePolicy for RootsOnly {
     }
 }
 
-/// What a repo's `relates_to` links may join.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Links {
-    /// Only a parent and its child; any other link is a `stray-link` (ADR-0001).
-    TreeOnly,
-    /// Also related issues; no link is stray.
-    Shared,
-}
-
 pub fn check(
     items: &[Item],
     scheme: &dyn RelationScheme,
     policy: &dyn StatePolicy,
-    links: Links,
-    origin: Option<&OriginLine>,
+    extra_keys: &[String],
 ) -> Vec<Finding> {
     let by: HashMap<u64, &Item> = items.iter().map(|it| (it.iid, it)).collect();
     let mut sorted: Vec<&Item> = items.iter().collect();
@@ -106,34 +97,16 @@ pub fn check(
                 detail,
             })
         };
-        let first = ParentLine::parse(&it.desc);
-        let parent_lines = it
-            .desc
-            .split('\n')
-            .filter(|l| ParentLine::parse(l).is_some())
-            .count();
-        if parent_lines > 1 || (parent_lines == 1 && first.is_none()) {
-            add(
-                "parent-line",
-                "one Parent line, and only as the first line".into(),
-            );
-        }
-        let o = origin.and_then(|r| r.origin_of(&it.desc));
-        if let Some(r) = origin {
-            let origin_lines = it
-                .desc
-                .split('\n')
-                .filter(|l| r.parse_line(l).is_some())
-                .count();
-            if origin_lines > 1 || (origin_lines == 1 && o.is_none()) {
-                add(
-                    "origin-line",
-                    format!(
-                        "one {} line, and only under the Parent line or first",
-                        r.word
-                    ),
-                );
+        match header::parse(&it.desc, extra_keys) {
+            Err(e) => add("header", e),
+            Ok(header::Split {
+                header: Some(h), ..
+            }) => {
+                if let Some(key) = h.naming(it.iid) {
+                    add("header", format!("`{key}` names the item itself"));
+                }
             }
+            Ok(_) => {}
         }
         if it.kind == "task" {
             add("task", "still a Task".into());
@@ -142,42 +115,13 @@ pub fn check(
         if let Some(p) = p.filter(|p| !by.contains_key(p)) {
             add("missing-parent", format!("#{p} does not exist"));
         }
-        if let Some(o) = o.filter(|o| !by.contains_key(o)) {
-            add("missing-origin", format!("#{o} does not exist"));
-        }
-        if let (Some(line), Some(links)) = (first, &it.links)
-            && !links.contains(&line)
+        if let (Some(p), Some(links)) = (p, &it.links)
+            && !links.contains(&p)
         {
             add(
                 "unlinked",
-                format!("no relates_to link to #{line}, so tree <root> misses it"),
+                format!("no relates_to link to #{p}, so tree <root> misses it"),
             );
-        }
-        if let (Some(o), Some(links)) = (o, &it.links)
-            && !links.contains(&o)
-        {
-            add(
-                "unlinked",
-                format!("no relates_to link to #{o}, its origin"),
-            );
-        }
-        let strays = if links == Links::TreeOnly {
-            it.link_ends()
-        } else {
-            &[]
-        };
-        for &l in strays.iter().filter(|l| **l > it.iid) {
-            let names_it = |other: &Item| {
-                scheme.parent_of(other) == Some(it.iid)
-                    || origin.and_then(|r| r.origin_of(&other.desc)) == Some(it.iid)
-            };
-            let joined = p == Some(l) || o == Some(l) || by.get(&l).is_some_and(|x| names_it(x));
-            if !joined {
-                add(
-                    "stray-link",
-                    format!("the link to #{l} joins no parent and child, nor an origin"),
-                );
-            }
         }
         let (mut seen, mut cur) = (HashSet::from([it.iid]), p);
         while let Some(c) = cur.filter(|c| by.contains_key(c)) {
@@ -234,6 +178,13 @@ pub fn to_json(findings: &[Finding]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheme::FrontMatter;
+    use State::{Closed, Open};
+
+    /// A body whose header names `n` as the parent.
+    fn p(n: u64) -> String {
+        format!("+++\nparent = {n}\n+++\n")
+    }
 
     fn item(iid: u64, state: State, desc: &str, links: &[u64]) -> Item {
         let mut it = Item::new(iid, state, &format!("t{iid}"), desc);
@@ -242,14 +193,14 @@ mod tests {
     }
 
     fn kinds(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &ParentLine, &RootsOnly, Links::TreeOnly, None)
+        check(items, &FrontMatter, &RootsOnly, &[])
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
     }
 
     fn every(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &ParentLine, &EveryParent, Links::TreeOnly, None)
+        check(items, &FrontMatter, &EveryParent, &[])
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
@@ -259,8 +210,8 @@ mod tests {
     fn every_parent_holds_a_closed_slice_to_its_open_child_at_any_depth() {
         let items = [
             item(1, Open, "", &[2]),
-            item(2, Closed, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #2", &[2]),
+            item(2, Closed, &p(1), &[1, 3]),
+            item(3, Open, &p(2), &[2]),
         ];
         // #1 is open over its only child #2, which is closed: that is reported too
         assert_eq!(
@@ -276,8 +227,8 @@ mod tests {
     fn every_parent_reports_an_open_parent_whose_children_are_all_closed() {
         let items = [
             item(1, Open, "", &[2]),
-            item(2, Open, "Parent: #1", &[1, 3]),
-            item(3, Closed, "Parent: #2", &[2]),
+            item(2, Open, &p(1), &[1, 3]),
+            item(3, Closed, &p(2), &[2]),
         ];
         assert_eq!(every(&items), [("open-parent-all-closed", 2)]);
     }
@@ -287,8 +238,8 @@ mod tests {
         // #1 is closed, its child #2 closed, its grandchild #3 open: only #2 is reported
         let items = [
             item(1, Closed, "", &[2]),
-            item(2, Closed, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #2", &[2]),
+            item(2, Closed, &p(1), &[1, 3]),
+            item(3, Open, &p(2), &[2]),
         ];
         assert_eq!(every(&items), [("closed-parent-open-child", 2)]);
     }
@@ -297,107 +248,68 @@ mod tests {
     fn every_parent_leaves_a_consistent_tree_and_a_childless_item_alone() {
         let items = [
             item(1, Open, "", &[2]),
-            item(2, Open, "Parent: #1", &[1]),
+            item(2, Open, &p(1), &[1]),
             item(4, Closed, "", &[]),
         ];
         assert!(every(&items).is_empty());
     }
 
-    use State::{Closed, Open};
-
-    fn with_origin(items: &[Item], links: Links) -> Vec<(&'static str, u64)> {
-        check(
-            items,
-            &ParentLine,
-            &EveryParent,
-            links,
-            Some(&OriginLine::new("From")),
-        )
-        .iter()
-        .map(|f| (f.kind, f.iid))
-        .collect()
-    }
-
-    #[test]
-    fn a_linked_find_does_not_hold_its_closed_origin_open() {
-        let items = [
-            item(1, Closed, "", &[2]),
-            item(2, Open, "From: #1 (found while measuring)\n\nx", &[1]),
-            item(3, Open, "", &[4]),
-            item(4, Open, "Parent: #3\nFrom: #1\n\ny", &[3, 1]),
-        ];
-        // #1 also links #4 as its origin
-        let mut items = items.to_vec();
-        items[0].links = Some(vec![2, 4]);
-        assert!(with_origin(&items, Links::TreeOnly).is_empty());
-    }
-
-    #[test]
-    fn an_origin_link_is_not_stray_but_any_other_still_is() {
-        let items = [
-            item(1, Open, "", &[2, 3]),
-            item(2, Open, "From: #1", &[1, 3]),
-            item(3, Open, "", &[1, 2]),
-        ];
-        assert_eq!(
-            with_origin(&items, Links::TreeOnly),
-            [("stray-link", 1), ("stray-link", 2)]
-        );
-    }
-
-    #[test]
-    fn an_origin_line_out_of_place_or_doubled() {
-        let items = [
-            item(1, Open, "", &[]),
-            item(2, Open, "x\nFrom: #1", &[]),
-            item(3, Open, "From: #1\nFrom: #1", &[]),
-            item(4, Open, "Parent: #1\n\nFrom: #1", &[]),
-        ];
-        let found = with_origin(&items, Links::Shared);
-        assert!(found.contains(&("origin-line", 2)), "{found:?}");
-        assert!(found.contains(&("origin-line", 3)), "{found:?}");
-        assert!(found.contains(&("origin-line", 4)), "{found:?}");
-    }
-
-    #[test]
-    fn an_origin_that_does_not_exist_or_is_not_linked() {
-        assert_eq!(
-            with_origin(&[item(2, Open, "From: #99", &[99])], Links::TreeOnly),
-            [("missing-origin", 2)]
-        );
-        assert_eq!(
-            with_origin(
-                &[item(1, Open, "", &[]), item(2, Open, "From: #1", &[])],
-                Links::TreeOnly
-            ),
-            [("unlinked", 2)]
-        );
-    }
-
-    #[test]
-    fn without_an_origin_word_an_origin_line_is_just_text() {
-        let items = [item(1, Open, "", &[]), item(2, Open, "x\nFrom: #1", &[])];
-        assert!(kinds(&items).is_empty());
-    }
-
     #[test]
     fn a_linked_tree_with_an_open_child_under_an_open_root_is_clean() {
-        assert!(kinds(&[item(1, Open, "", &[2]), item(2, Open, "Parent: #1", &[1])]).is_empty());
+        assert!(kinds(&[item(1, Open, "", &[2]), item(2, Open, &p(1), &[1])]).is_empty());
     }
 
     #[test]
-    fn a_parent_line_that_is_not_first_or_is_doubled() {
-        assert_eq!(
-            kinds(&[item(1, Open, "", &[]), item(2, Open, "x\nParent: #1", &[])]),
-            [("parent-line", 2)]
+    fn a_header_out_of_form_is_reported_with_its_reason() {
+        let found = check(
+            &[
+                item(1, Open, "", &[]),
+                item(2, Open, "+++\nparnet = 1\n+++\n", &[]),
+                item(3, Open, "+++\nparent = #1\n+++\n", &[]),
+                item(4, Open, "+++\n[extra]\nmarker = \"x\"\n+++\n", &[]),
+            ],
+            &FrontMatter,
+            &RootsOnly,
+            &[],
         );
-        assert_eq!(
-            kinds(&[
-                item(1, Open, "", &[2]),
-                item(2, Open, "Parent: #1\r\nParent: #1", &[1])
-            ]),
-            [("parent-line", 2)]
+        let got: Vec<(&str, u64)> = found.iter().map(|f| (f.kind, f.iid)).collect();
+        assert_eq!(got, [("header", 2), ("header", 3), ("header", 4)]);
+        assert!(found[0].detail.contains("parnet"), "{}", found[0].detail);
+        let declared = ["marker".to_string()];
+        let found = check(
+            &[item(4, Open, "+++\n[extra]\nmarker = \"x\"\n+++\n", &[])],
+            &FrontMatter,
+            &RootsOnly,
+            &declared,
         );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_header_naming_the_item_itself_is_reported() {
+        for (desc, key) in [
+            ("+++\nfrom = 2\n+++\n", "`from`"),
+            ("+++\nrelated = [1, 2]\n+++\n", "`related`"),
+            ("+++\nblocked_by = [2]\n+++\n", "`blocked_by`"),
+        ] {
+            let found = check(
+                &[item(1, Open, "", &[]), item(2, Open, desc, &[])],
+                &FrontMatter,
+                &RootsOnly,
+                &[],
+            );
+            assert!(
+                found
+                    .iter()
+                    .any(|f| f.kind == "header" && f.iid == 2 && f.detail.contains(key)),
+                "{desc:?}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_old_first_line_makes_no_parent() {
+        assert!(kinds(&[item(1, Open, "", &[]), item(2, Open, "Parent: #1", &[])]).is_empty());
     }
 
     #[test]
@@ -410,50 +322,27 @@ mod tests {
     #[test]
     fn a_parent_that_does_not_exist() {
         assert_eq!(
-            kinds(&[item(2, Open, "Parent: #99", &[99])]),
+            kinds(&[item(2, Open, &p(99), &[99])]),
             [("missing-parent", 2)]
         );
     }
 
     #[test]
-    fn a_parent_line_without_its_link_but_only_where_links_were_recorded() {
+    fn a_parent_without_its_link_but_only_where_links_were_recorded() {
         assert_eq!(
-            kinds(&[item(1, Open, "", &[]), item(2, Open, "Parent: #1", &[])]),
+            kinds(&[item(1, Open, "", &[]), item(2, Open, &p(1), &[])]),
             [("unlinked", 2)]
         );
         let mut a = Item::new(1, Open, "t1", "");
-        let mut b = Item::new(2, Open, "t2", "Parent: #1");
+        let mut b = Item::new(2, Open, "t2", &p(1));
         a.links = None;
         b.links = None;
         assert!(kinds(&[a, b]).is_empty());
     }
 
     #[test]
-    fn a_link_that_joins_no_parent_and_child_is_reported_once_at_the_lower_number() {
-        let items = [
-            item(1, Open, "", &[2, 3]),
-            item(2, Open, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #1", &[1, 2]),
-        ];
-        assert_eq!(kinds(&items), [("stray-link", 2)]);
-    }
-
-    #[test]
-    fn a_repo_that_shares_links_with_related_issues_has_no_stray_link() {
-        let items = [
-            item(1, Open, "", &[2, 3]),
-            item(2, Open, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #1", &[1, 2]),
-        ];
-        assert!(check(&items, &ParentLine, &RootsOnly, Links::Shared, None).is_empty());
-    }
-
-    #[test]
     fn a_cycle_is_reported_on_every_item_in_it() {
-        let items = [
-            item(1, Open, "Parent: #2", &[2]),
-            item(2, Open, "Parent: #1", &[1]),
-        ];
+        let items = [item(1, Open, &p(2), &[2]), item(2, Open, &p(1), &[1])];
         assert_eq!(kinds(&items), [("cycle", 1), ("cycle", 2)]);
     }
 
@@ -461,24 +350,24 @@ mod tests {
     fn a_closed_root_with_an_open_grandchild_is_reported_at_the_root() {
         let items = [
             item(1, Closed, "", &[2]),
-            item(2, Closed, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #2", &[2]),
+            item(2, Closed, &p(1), &[1, 3]),
+            item(3, Open, &p(2), &[2]),
         ];
         assert_eq!(kinds(&items), [("closed-parent-open-child", 1)]);
     }
 
     #[test]
     fn an_open_root_whose_every_descendant_is_closed_is_reported() {
-        let items = [item(1, Open, "", &[2]), item(2, Closed, "Parent: #1", &[1])];
+        let items = [item(1, Open, "", &[2]), item(2, Closed, &p(1), &[1])];
         assert_eq!(kinds(&items), [("open-parent-all-closed", 1)]);
     }
 
     #[test]
-    fn a_closed_child_with_an_open_follow_up_is_normal() {
+    fn under_roots_only_a_closed_child_over_an_open_one_is_normal() {
         let items = [
             item(1, Open, "", &[2]),
-            item(2, Closed, "Parent: #1", &[1, 3]),
-            item(3, Open, "Parent: #2", &[2]),
+            item(2, Closed, &p(1), &[1, 3]),
+            item(3, Open, &p(2), &[2]),
         ];
         assert!(kinds(&items).is_empty());
     }
@@ -486,22 +375,22 @@ mod tests {
     #[test]
     fn an_item_under_a_missing_parent_is_not_held_to_the_root_rule() {
         let items = [
-            item(2, Closed, "Parent: #99", &[99, 3]),
-            item(3, Open, "Parent: #2", &[2]),
+            item(2, Closed, &p(99), &[99, 3]),
+            item(3, Open, &p(2), &[2]),
         ];
         assert_eq!(kinds(&items), [("missing-parent", 2)]);
     }
 
     #[test]
-    fn findings_come_by_number_and_in_the_python_tools_kind_order() {
-        let mut t = item(5, Open, "x\nParent: #1", &[]);
+    fn findings_come_by_number_and_header_first() {
+        let mut t = item(5, Open, "+++\nparnet = 1\n+++\n", &[]);
         t.kind = "task".into();
         let items = [item(1, Open, "", &[]), t];
-        assert_eq!(kinds(&items), [("parent-line", 5), ("task", 5)]);
+        assert_eq!(kinds(&items), [("header", 5), ("task", 5)]);
     }
 
     #[test]
-    fn the_text_lines_match_the_python_tool() {
+    fn the_text_lines_pad_the_kind_and_count_the_findings() {
         let f = [Finding {
             kind: "missing-parent",
             iid: 2,

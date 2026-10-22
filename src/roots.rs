@@ -1,12 +1,13 @@
 //! The tracker's roots, filtered for tools that act on finished features.
 
+use crate::header;
 use crate::item::{Item, State};
-use crate::scheme::{OriginLine, RelationScheme};
+use crate::scheme::RelationScheme;
 use crate::tracker::Error;
 use serde_json::{Value, json};
 
 /// The version of the JSON shape `to_json` prints.
-pub const JSON_VERSION: u32 = 1;
+pub const JSON_VERSION: u32 = 2;
 
 /// Which roots to keep; every condition must hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -121,20 +122,29 @@ pub fn render(roots: &[&Item]) -> Vec<String> {
         .collect()
 }
 
-/// `origin` is the number the item's origin line names under the repo's word, or null.
-pub fn to_json(roots: &[&Item], origin: Option<&OriginLine>) -> Value {
+/// `first_line` is the body's first line after the header; `from` and `extra` come from the header.
+pub fn to_json(roots: &[&Item]) -> Value {
     let list: Vec<Value> = roots
         .iter()
         .map(|it| {
+            let split = header::loose(&it.desc);
+            let h = split.header.unwrap_or_default();
+            let body = split.body.trim_start_matches(['\r', '\n']);
+            let extra: serde_json::Map<String, Value> = h
+                .extra
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Value::Null)))
+                .collect();
             json!({
                 "number": it.iid,
                 "title": it.title,
                 "state": it.state.as_str(),
                 "labels": it.labels,
                 "closed_at": it.closed_at,
-                "first_line": it.desc.split('\n').next().unwrap_or("").trim_end_matches('\r'),
+                "first_line": body.split('\n').next().unwrap_or("").trim_end_matches('\r'),
                 "url": it.url,
-                "origin": origin.and_then(|r| r.origin_of(&it.desc)),
+                "from": h.from,
+                "extra": extra,
             })
         })
         .collect();
@@ -144,7 +154,7 @@ pub fn to_json(roots: &[&Item], origin: Option<&OriginLine>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::ParentLine;
+    use crate::scheme::FrontMatter;
 
     fn it(iid: u64, state: State, desc: &str, labels: &[&str], closed: Option<&str>) -> Item {
         let mut i = Item::new(iid, state, &format!("t{iid}"), desc);
@@ -172,7 +182,7 @@ mod tests {
             it(
                 3,
                 State::Closed,
-                "Parent: #2",
+                "+++\nparent = 2\n+++\n",
                 &["bug"],
                 Some("2026-10-21T00:00:00Z"),
             ),
@@ -195,7 +205,7 @@ mod tests {
     }
 
     fn numbers(f: Filter) -> Vec<u64> {
-        roots(&items(), &ParentLine, &f)
+        roots(&items(), &FrontMatter, &f)
             .unwrap()
             .iter()
             .map(|i| i.iid)
@@ -299,9 +309,9 @@ mod tests {
             closed_since: Some("2026-10-19".into()),
             ..Filter::default()
         };
-        let e = roots(&old, &ParentLine, &f).unwrap_err().to_string();
+        let e = roots(&old, &FrontMatter, &f).unwrap_err().to_string();
         assert!(e.contains("closed_at"), "{e}");
-        assert!(roots(&old, &ParentLine, &Filter::default()).is_ok());
+        assert!(roots(&old, &FrontMatter, &Filter::default()).is_ok());
     }
 
     #[test]
@@ -314,19 +324,31 @@ mod tests {
 
     #[test]
     fn the_first_line_of_a_crlf_body_has_no_cr() {
-        let crlf = it(9, State::Closed, "NIT: PTR-9\r\nbody", &[], None);
-        assert_eq!(
-            to_json(&[&crlf], None)["roots"][0]["first_line"],
-            "NIT: PTR-9"
-        );
+        let crlf = it(9, State::Closed, "Done\r\nbody", &[], None);
+        assert_eq!(to_json(&[&crlf])["roots"][0]["first_line"], "Done");
     }
 
     #[test]
-    fn json_names_the_origin_under_the_repos_word() {
-        let found = it(9, State::Open, "From: #3 (x)\n\nbody", &[], None);
-        let o = OriginLine::new("From");
-        assert_eq!(to_json(&[&found], Some(&o))["roots"][0]["origin"], 3);
-        assert_eq!(to_json(&[&found], None)["roots"][0]["origin"], Value::Null);
+    fn json_carries_from_and_extra_and_the_first_line_after_the_header() {
+        let found = it(
+            9,
+            State::Closed,
+            "+++\r\nfrom = 3\r\n\r\n[extra]\r\nmarker = \"K-1 (x)\"\r\n+++\r\n\r\nWhat happens\r\nmore",
+            &[],
+            None,
+        );
+        let v = &to_json(&[&found])["roots"][0];
+        assert_eq!(
+            (v["from"].clone(), v["extra"]["marker"].clone()),
+            (json!(3), json!("K-1 (x)"))
+        );
+        assert_eq!(v["first_line"], "What happens");
+        let bare = it(8, State::Closed, "text", &[], None);
+        let v = &to_json(&[&bare])["roots"][0];
+        assert_eq!(
+            (v["from"].clone(), v["extra"].clone()),
+            (Value::Null, json!({}))
+        );
     }
 
     #[test]
@@ -340,8 +362,8 @@ mod tests {
                 "#4 [open] closed:- labels:SPEC t4"
             ]
         );
-        let v = to_json(&picked, None);
-        assert_eq!(v["version"], 1);
+        let v = to_json(&picked);
+        assert_eq!(v["version"], 2);
         assert_eq!(v["roots"][0]["first_line"], "NIT: PTR-1");
         assert_eq!(v["roots"][0]["closed_at"], "2026-10-19T23:59:59Z");
         assert_eq!(v["roots"][1]["closed_at"], Value::Null);

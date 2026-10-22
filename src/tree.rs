@@ -170,7 +170,7 @@ fn node_json(n: &Node) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheme::ParentLine;
+    use crate::scheme::FrontMatter;
     use crate::tracker::FakeTracker;
 
     fn item(iid: u64, state: State, desc: &str) -> Item {
@@ -178,16 +178,16 @@ mod tests {
     }
 
     fn draw(items: Vec<Item>, root: Option<u64>) -> Vec<String> {
-        render(&tree(&FakeTracker::new(items), &ParentLine, root).unwrap())
+        render(&tree(&FakeTracker::new(items), &FrontMatter, root).unwrap())
     }
 
     fn three_levels() -> Vec<Item> {
         vec![
             Item::new(1, State::Open, "root", ""),
-            item(2, State::Closed, "Parent: #1"),
-            item(3, State::Open, "Parent: #1"),
-            item(4, State::Closed, "Parent: #3"),
-            item(5, State::Open, "Parent: #3"),
+            item(2, State::Closed, "+++\nparent = 1\n+++\n"),
+            item(3, State::Open, "+++\nparent = 1\n+++\n"),
+            item(4, State::Closed, "+++\nparent = 3\n+++\n"),
+            item(5, State::Open, "+++\nparent = 3\n+++\n"),
         ]
     }
 
@@ -208,9 +208,9 @@ mod tests {
     #[test]
     fn children_print_in_number_order_whatever_the_source_order() {
         let items = vec![
-            item(7, State::Open, "Parent: #1"),
+            item(7, State::Open, "+++\nparent = 1\n+++\n"),
             item(1, State::Open, ""),
-            item(3, State::Open, "Parent: #1"),
+            item(3, State::Open, "+++\nparent = 1\n+++\n"),
         ];
         assert_eq!(
             draw(items, Some(1))[1..],
@@ -222,7 +222,7 @@ mod tests {
     fn no_root_draws_every_root_and_an_item_whose_parent_is_absent() {
         let mut items = three_levels();
         items.push(item(9, State::Open, ""));
-        items.push(item(8, State::Open, "Parent: #99"));
+        items.push(item(8, State::Open, "+++\nparent = 99\n+++\n"));
         let roots: Vec<String> = draw(items, None)
             .into_iter()
             .filter(|l| !l.starts_with(' '))
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn a_cycle_stops_instead_of_looping() {
         let items = vec![
-            item(1, State::Open, "Parent: #2"),
-            item(2, State::Open, "Parent: #1"),
+            item(1, State::Open, "+++\nparent = 2\n+++\n"),
+            item(2, State::Open, "+++\nparent = 1\n+++\n"),
         ];
         assert_eq!(
             draw(items, Some(1)),
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_root_that_is_not_in_the_tracker_is_an_error() {
-        let r = tree(&FakeTracker::new(three_levels()), &ParentLine, Some(42));
+        let r = tree(&FakeTracker::new(three_levels()), &FrontMatter, Some(42));
         assert!(matches!(r, Err(Error::NotFound(42))));
     }
 
@@ -255,7 +255,7 @@ mod tests {
         // every parent and child joined both ways, as the tracker convention requires
         let pairs: Vec<(u64, u64)> = items
             .iter()
-            .filter_map(|it| ParentLine.parent_of(it).map(|p| (it.iid, p)))
+            .filter_map(|it| FrontMatter.parent_of(it).map(|p| (it.iid, p)))
             .collect();
         for it in &mut items {
             for (c, p) in &pairs {
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn the_walk_asks_one_level_per_depth() {
         let t = FakeTracker::new(linked(three_levels()));
-        subtree(&t, &ParentLine, 1).unwrap();
+        subtree(&t, &FrontMatter, 1).unwrap();
         assert_eq!(*t.levels.borrow(), vec![vec![1], vec![2, 3], vec![4, 5]]);
     }
 
@@ -281,23 +281,23 @@ mod tests {
     fn the_walk_draws_what_reading_every_item_draws() {
         let t = FakeTracker::new(linked(three_levels()));
         assert_eq!(
-            live_tree(&t, &ParentLine, 1).unwrap(),
-            tree(&t, &ParentLine, Some(1)).unwrap()
+            live_tree(&t, &FrontMatter, 1).unwrap(),
+            tree(&t, &FrontMatter, Some(1)).unwrap()
         );
         assert_eq!(
-            live_tree(&t, &ParentLine, 3).unwrap(),
-            tree(&t, &ParentLine, Some(3)).unwrap()
+            live_tree(&t, &FrontMatter, 3).unwrap(),
+            tree(&t, &FrontMatter, Some(3)).unwrap()
         );
     }
 
     #[test]
     fn a_linked_item_that_names_another_parent_is_not_a_child() {
         let mut items = linked(three_levels());
-        let mut stray = item(6, State::Open, "Parent: #9");
+        let mut stray = item(6, State::Open, "+++\nparent = 9\n+++\n");
         stray.links = Some(vec![1]);
         items[0].links.get_or_insert_with(Vec::new).push(6);
         items.push(stray);
-        let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
+        let got: Vec<u64> = subtree(&FakeTracker::new(items), &FrontMatter, 1)
             .unwrap()
             .iter()
             .map(|it| it.iid)
@@ -315,7 +315,7 @@ mod tests {
                 ls.retain(|l| *l != 5 && me != 5)
             }
         });
-        let got: Vec<u64> = subtree(&FakeTracker::new(items), &ParentLine, 1)
+        let got: Vec<u64> = subtree(&FakeTracker::new(items), &FrontMatter, 1)
             .unwrap()
             .iter()
             .map(|it| it.iid)
@@ -326,26 +326,26 @@ mod tests {
     #[test]
     fn the_walk_stops_at_a_cycle() {
         let items = linked(vec![
-            item(1, State::Open, "Parent: #2"),
-            item(2, State::Open, "Parent: #1"),
+            item(1, State::Open, "+++\nparent = 2\n+++\n"),
+            item(2, State::Open, "+++\nparent = 1\n+++\n"),
         ]);
         let t = FakeTracker::new(items);
-        assert_eq!(subtree(&t, &ParentLine, 1).unwrap().len(), 2);
+        assert_eq!(subtree(&t, &FrontMatter, 1).unwrap().len(), 2);
         assert_eq!(
-            render(&live_tree(&t, &ParentLine, 1).unwrap()),
+            render(&live_tree(&t, &FrontMatter, 1).unwrap()),
             ["#1 [open] t1  0/1", "  #2 [open] t2"]
         );
     }
 
     #[test]
     fn a_walk_from_an_absent_root_is_an_error() {
-        let r = subtree(&FakeTracker::new(three_levels()), &ParentLine, 42);
+        let r = subtree(&FakeTracker::new(three_levels()), &FrontMatter, 42);
         assert!(matches!(r, Err(Error::NotFound(42))));
     }
 
     #[test]
     fn json_nests_the_same_tree_under_a_version() {
-        let v = to_json(&tree(&FakeTracker::new(three_levels()), &ParentLine, Some(3)).unwrap());
+        let v = to_json(&tree(&FakeTracker::new(three_levels()), &FrontMatter, Some(3)).unwrap());
         assert_eq!(
             v,
             json!({

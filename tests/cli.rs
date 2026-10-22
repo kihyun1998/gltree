@@ -132,7 +132,7 @@ fn a_clean_tracker_checks_with_exit_0() {
     std::fs::write(
         &snap,
         r#"[{"iid": 1, "title": "a", "state": "open", "desc": "", "links": [2]},
-            {"iid": 2, "title": "b", "state": "open", "desc": "Parent: #1", "links": [1]}]"#,
+            {"iid": 2, "title": "b", "state": "open", "desc": "+++\nparent = 1\n+++\n", "links": [1]}]"#,
     )
     .unwrap();
     let out = gltree(&["check", "--snapshot", snap.to_str().unwrap()]);

@@ -18,7 +18,7 @@ use std::process::ExitCode;
 #[command(
     name = "gltree",
     version,
-    about = "Issue trees for GitLab trackers whose parent is the body's first line `Parent: #N`"
+    about = "Issue trees for GitLab trackers whose references sit in a TOML header at the top of each body"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -48,17 +48,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Create an item whose body opens with `Parent: #N` and the origin line, linked to each, in one step
+    /// Create an item whose header names its parent and where it was found, linked to each, in one step
     New {
         /// The parent, as `N` or `#N`; without it the item is a root
         #[arg(long, value_parser = parse_iid)]
         parent: Option<u64>,
-        /// The item it was found while working, as `N` or `#N`: an origin line, not a parent
+        /// The item it was found while working, as `N` or `#N`: the header's `from`, not a parent
         #[arg(long, value_parser = parse_iid)]
         from: Option<u64>,
         #[arg(long)]
         title: String,
-        /// The body, a UTF-8 file; gltree writes the Parent line above it
+        /// The body, a UTF-8 file; gltree writes the header above it
         #[arg(long)]
         body_file: PathBuf,
         /// A label to apply; repeat it, or separate labels with commas
@@ -68,7 +68,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Give an item a new parent, or make it a root, keeping its Parent line and links in step
+    /// Give an item a new parent, or make it a root, keeping its header and links in step
     Move {
         /// The item to move, as `N` or `#N`
         #[arg(value_parser = parse_iid)]
@@ -155,11 +155,11 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let config = RepoConfig::of_clone(&std::env::current_dir()?)?;
     let scheme = config.scheme();
-    let (policy, origin) = (config.policy(), config.origin());
+    let policy = config.policy();
     let rules = write::Rules {
         opted_in: config.present,
         policy: policy.as_ref(),
-        origin: origin.as_ref(),
+        extra_keys: &config.extra_keys,
     };
     let mut out = std::io::stdout().lock();
     match cli.command {
@@ -188,13 +188,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Check { snapshot, json } => {
             let items = source(snapshot)?.all_items()?;
-            let found = check::check(
-                &items,
-                scheme.as_ref(),
-                config.policy().as_ref(),
-                config.links(),
-                config.origin().as_ref(),
-            );
+            let found = check::check(&items, scheme.as_ref(), policy.as_ref(), &config.extra_keys);
             if json {
                 writeln!(
                     out,
@@ -237,9 +231,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let place = made
                     .link
                     .map_or("(a root)".to_string(), |(p, _)| format!("under #{p}"));
-                let found = made
-                    .origin
-                    .map_or(String::new(), |f| format!(", from #{f}"));
+                let found = made.from.map_or(String::new(), |f| format!(", from #{f}"));
                 writeln!(
                     out,
                     "#{} {place}{found}: {}",
@@ -308,10 +300,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 writeln!(
                     out,
                     "{}",
-                    serde_json::to_string_pretty(&roots::to_json(
-                        &found,
-                        config.origin().as_ref()
-                    ))?
+                    serde_json::to_string_pretty(&roots::to_json(&found))?
                 )?;
             } else {
                 for line in roots::render(&found) {
