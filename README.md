@@ -6,11 +6,23 @@ body's first line, `Parent: #N` — the convention gltree owns ([ADR-0001](docs/
 
 ## Install
 
-From source, until releases exist:
+macOS / Linux (Homebrew):
 
 ```sh
-cargo install --git https://github.com/kihyun1998/gltree
+brew tap kihyun1998/tap
+brew trust kihyun1998/tap      # once; recent Homebrew refuses an untrusted third-party tap
+brew install gltree
 ```
+
+Windows (Scoop):
+
+```sh
+scoop bucket add kihyun1998 https://github.com/kihyun1998/scoop-bucket
+scoop install gltree
+```
+
+Or an archive from the [releases](https://github.com/kihyun1998/gltree/releases) (Linux musl,
+macOS, Windows; x64 and arm64), or from source: `cargo install --git https://github.com/kihyun1998/gltree --locked`.
 
 ## Use
 
