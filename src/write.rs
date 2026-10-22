@@ -366,6 +366,8 @@ pub struct Edits {
     pub remove_related: Vec<u64>,
     pub add_blocked_by: Vec<u64>,
     pub remove_blocked_by: Vec<u64>,
+    /// `[extra]` values to set, each under a key the repo config declares.
+    pub set_extra: Vec<(String, String)>,
 }
 
 /// An edit: the item, its `related` and `blocked_by` after, and whether anything was written.
@@ -420,6 +422,15 @@ pub fn edit_item(
         &edits.add_blocked_by,
         &edits.remove_blocked_by,
     ];
+    if let Some((k, _)) = edits
+        .set_extra
+        .iter()
+        .find(|(k, _)| !rules.extra_keys.contains(k))
+    {
+        return Err(Error::Refused(format!(
+            "`{k}` is not an extra key the repo config declares"
+        )));
+    }
     if all.iter().any(|ns| ns.contains(&n)) {
         return Err(Error::Refused(format!("#{n} cannot name itself")));
     }
@@ -479,11 +490,16 @@ pub fn edit_item(
         .into_iter()
         .filter(|x| !h.related.contains(x))
         .collect();
+    let extra_before = h.extra.clone();
+    for (k, v) in &edits.set_extra {
+        h.extra.insert(k.clone(), toml::Value::String(v.clone()));
+    }
     let changed = !(gone_related.is_empty()
         && new_related.is_empty()
         && gone_blocked.is_empty()
         && new_blocked.is_empty()
-        && mirror_only.is_empty());
+        && mirror_only.is_empty()
+        && h.extra == extra_before);
     if !changed {
         return Ok(Edited {
             iid: n,
@@ -1146,6 +1162,43 @@ mod tests {
         assert!(!t.item(3).unwrap().desc.contains("blocks"));
         assert_eq!(links_of(&t, 3), vec![2]);
         assert!(clean(&t).is_empty(), "{:?}", clean(&t));
+    }
+
+    #[test]
+    fn edit_sets_a_declared_extra_value_and_refuses_an_undeclared_one() {
+        let t = tree3();
+        let declared = ["marker".to_string()];
+        let r = Rules {
+            extra_keys: &declared,
+            ..rules(true)
+        };
+        let set = Edits {
+            set_extra: vec![("marker".into(), "K-1 (등록 2026-10-22)".into())],
+            ..Edits::default()
+        };
+        assert!(edit_item(&t, &r, 4, &set).unwrap().changed);
+        assert_eq!(
+            t.item(4).unwrap().desc,
+            "+++\nrelated = [2]\n\n[extra]\nmarker = \"K-1 (등록 2026-10-22)\"\n+++\n\nlone"
+        );
+        let writes = t.writes.borrow().len();
+        assert!(!edit_item(&t, &r, 4, &set).unwrap().changed);
+        let other = Edits {
+            set_extra: vec![("other".into(), "x".into())],
+            ..Edits::default()
+        };
+        assert!(matches!(
+            edit_item(&t, &r, 4, &other),
+            Err(Error::Refused(m)) if m.contains("`other`")
+        ));
+        assert_eq!(t.writes.borrow().len(), writes);
+        let found = crate::check::check(
+            &t.all_items().unwrap(),
+            &FrontMatter,
+            &crate::check::RootsOnly,
+            &declared,
+        );
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]

@@ -89,6 +89,9 @@ enum Command {
         add_blocked_by: Vec<u64>,
         #[arg(long, value_parser = parse_iid)]
         remove_blocked_by: Vec<u64>,
+        /// Set an `[extra]` value, as `key=value`; the key must be one the repo config declares
+        #[arg(long, value_parser = parse_extra)]
+        set_extra: Vec<(String, String)>,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -173,6 +176,14 @@ enum Command {
         /// The file to write
         out: PathBuf,
     },
+}
+
+/// `key=value` for `--set-extra`.
+fn parse_extra(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .ok_or_else(|| format!("not key=value: {s}"))
 }
 
 fn parse_iid(s: &str) -> Result<u64, String> {
@@ -318,6 +329,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             remove_related,
             add_blocked_by,
             remove_blocked_by,
+            set_extra,
             json,
         } => {
             let edits = write::Edits {
@@ -325,9 +337,12 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 remove_related,
                 add_blocked_by,
                 remove_blocked_by,
+                set_extra,
             };
             if edits == write::Edits::default() {
-                return Err("edit needs at least one --add-* or --remove-* flag".into());
+                return Err(
+                    "edit needs at least one --add-*, --remove-* or --set-extra flag".into(),
+                );
             }
             write::require_opt_in(config.present)?;
             let e = write::edit_item(&server()?, &rules, item, &edits)?;

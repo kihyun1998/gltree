@@ -142,6 +142,7 @@ left, in order, and exits 2. `--json` prints
 ```sh
 gltree edit 19 --add-related 30 --add-blocked-by 40
 gltree edit 19 --remove-related 30 --remove-blocked-by 40
+gltree edit 19 --set-extra "marker=K-1 (registered)"   # a declared [extra] key
 ```
 
 Changes #19's `related` and `blocked_by`, with the links and the other ends: an added related item
@@ -149,7 +150,7 @@ lists #19 back and an added blocker lists it under `blocks`; a removed related i
 both ends, and a removed blocker's `blocks` is synced. A link goes only when no reference on either
 end still explains it, and a note goes with the key it explained. It refuses, before writing, a
 header out of form, #19 itself, a missing item to add, and a blocker that #19 already blocks at any
-depth; an edit that changes nothing writes nothing. `--json` prints
+depth, and an `[extra]` key the repo config does not declare; an edit that changes nothing writes nothing. `--json` prints
 `{"version": 1, "item", "related", "blocked_by", "changed"}`.
 
 ## Move
