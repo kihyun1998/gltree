@@ -59,7 +59,8 @@ fn tree_of_every_root_matches_the_python_tool_byte_for_byte() {
 fn json_prints_the_versioned_tree() {
     let v: serde_json::Value =
         serde_json::from_str(&tree_text(&["tree", "3", "--snapshot", FIXTURE, "--json"])).unwrap();
-    assert_eq!(v["version"], 1);
+    assert_eq!(v["version"], 2);
+    assert_eq!(v["roots"][0]["blocked_by_open"], serde_json::json!([]));
     assert_eq!(v["roots"][0]["number"], 3);
     assert_eq!(
         (
@@ -119,9 +120,9 @@ fn check_json_lists_each_finding() {
     let out = gltree(&["check", "--snapshot", FIXTURE, "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["version"], 1);
-    assert_eq!(v["findings"].as_array().unwrap().len(), 8);
-    assert_eq!(v["findings"][0]["kind"], "missing-parent");
-    assert_eq!(v["findings"][0]["item"], 8);
+    assert_eq!(v["findings"].as_array().unwrap().len(), 9);
+    assert_eq!(v["findings"][0]["kind"], "old-header");
+    assert_eq!(v["findings"][0]["item"], 4);
 }
 
 #[test]

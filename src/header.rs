@@ -41,6 +41,17 @@ impl Header {
         *self == Header::default()
     }
 
+    /// Whether the header holds a value under the reference key `key`.
+    pub fn has(&self, key: &str) -> bool {
+        match key {
+            "parent" => self.parent.is_some(),
+            "from" => self.from.is_some(),
+            "related" => !self.related.is_empty(),
+            "blocked_by" => !self.blocked_by.is_empty(),
+            _ => false,
+        }
+    }
+
     /// The first reference key, in the written order, that names `iid`.
     pub fn naming(&self, iid: u64) -> Option<&'static str> {
         let lists: [(&'static str, &[u64]); 4] = [
@@ -110,10 +121,73 @@ pub fn parse<'a>(desc: &'a str, extra: &[String]) -> Result<Split<'a>, String> {
             _ => return Err(format!("unknown key `{key}`")),
         }
     }
+    if h.from.is_some() && h.from == h.parent {
+        return Err(
+            "`from` names the parent; an item found while working its parent is part of it, so keep `parent` alone"
+                .into(),
+        );
+    }
+    if let Some(k) = h.notes.keys().find(|k| !h.has(k)) {
+        return Err(format!("`[notes]` has `{k}`, but the header has no `{k}`"));
+    }
     Ok(Split {
         header: Some(h),
         body,
     })
+}
+
+/// The references a person writes — `parent`, `from`, `related`, `blocked_by` — as far as they can
+/// be read, keyed by name: a value out of form is skipped rather than failing the rest, so one
+/// stray key never hides the others from the link and state checks.
+pub fn refs_of(desc: &str) -> Vec<(&'static str, u64)> {
+    let Some(table) = fenced(desc)
+        .ok()
+        .flatten()
+        .and_then(|(text, _)| text.parse::<toml::Table>().ok())
+    else {
+        return vec![];
+    };
+    let n = |v: &toml::Value| {
+        v.as_integer()
+            .and_then(|n| u64::try_from(n).ok())
+            .filter(|n| *n > 0)
+    };
+    let mut out = Vec::new();
+    for key in ["parent", "from"] {
+        if let Some(x) = table.get(key).and_then(n) {
+            out.push((key, x));
+        }
+    }
+    for key in ["related", "blocked_by"] {
+        let items = table.get(key).and_then(|v| v.as_array());
+        for x in items.into_iter().flatten().filter_map(n) {
+            out.push((key, x));
+        }
+    }
+    out
+}
+
+/// The keys of the first-line format a body may still open with; a repo adds its own words
+/// through `old_head_keys`.
+pub const OLD_HEAD_KEYS: &[&str] = &["Parent", "From", "Related", "Blocked by", "Depends on"];
+
+/// The first line of `body` when it is still a first-line head: one of `OLD_HEAD_KEYS` or
+/// `more_keys`, a colon, and an issue number with nothing after it but a list, a reason or
+/// punctuation — such as `Blocked by: #4`. A sentence that only starts that way is not one, and
+/// another key with numbers (`Covers gaps: #2`) is prose of the body's own.
+pub fn old_head<'a>(body: &'a str, more_keys: &[String]) -> Option<&'a str> {
+    let line = body
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r'))
+        .find(|l| !l.trim().is_empty())?;
+    let (key, rest) = line.split_once(": #")?;
+    if !OLD_HEAD_KEYS.contains(&key) && !more_keys.iter().any(|k| k == key) {
+        return None;
+    }
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    let after = rest[digits..].trim_start();
+    let tail_ok = after.is_empty() || after.starts_with([',', '(', ';', '.', '—', '-', '#']);
+    (digits > 0 && tail_ok).then_some(line)
 }
 
 /// The header and body as far as they can be read, for display: every `[extra]` key is taken,
@@ -337,11 +411,67 @@ mod tests {
                 "`[notes]` has `children`",
             ),
             ("+++\n[extra]\nmarker = \"x\"\n+++\n", "does not declare"),
+            (
+                "+++\nparent = 3\nfrom = 3\n+++\n",
+                "`from` names the parent",
+            ),
+            (
+                "+++\nparent = 3\n\n[notes]\nfrom = \"x\"\n+++\n",
+                "the header has no `from`",
+            ),
         ];
         for (desc, says) in cases {
             let e = parse(desc, &[]).unwrap_err();
             assert!(e.contains(says), "{desc:?}: {e}");
         }
+    }
+
+    #[test]
+    fn refs_are_read_loosely_by_key_skipping_what_is_out_of_form() {
+        let desc = "+++\nparent = 1\nfrom = 2\nrelated = [5, 4]\nblocked_by = [6, \"x\"]\nchildren = [9]\nparnet = 3\n+++\n";
+        assert_eq!(
+            refs_of(desc),
+            [
+                ("parent", 1),
+                ("from", 2),
+                ("related", 5),
+                ("related", 4),
+                ("blocked_by", 6)
+            ]
+        );
+        assert!(refs_of("Parent: #1").is_empty());
+        assert!(refs_of("+++\nparent = #1\n+++\n").is_empty());
+    }
+
+    #[test]
+    fn an_old_head_is_a_known_key_and_a_number_not_a_sentence() {
+        let mine = ["Origin".to_string()];
+        for line in [
+            "Blocked by: #4",
+            "Parent: #12",
+            "Blocked by: #2550 (the state), #2551.",
+            "From: #8 (found while reproducing)",
+            "Related: #3, #4",
+            "Depends on: #2495",
+            "Origin: #649 (a find)",
+        ] {
+            assert_eq!(
+                old_head(&format!("\n{line}\nbody"), &mine),
+                Some(line),
+                "{line}"
+            );
+        }
+        for body in [
+            "Parent: #1 is quoted here, not a parent line",
+            "Mentions Parent: #1 on its first line",
+            "## Problem\nParent: #1",
+            "Blocked by: none",
+            "Covers gaps: #2 (handshake errors) + #3 (nested)",
+            "",
+        ] {
+            assert_eq!(old_head(body, &mine), None, "{body}");
+        }
+        assert_eq!(old_head("Origin: #649", &[]), None);
     }
 
     #[test]

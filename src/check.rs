@@ -79,6 +79,17 @@ pub fn check(
     policy: &dyn StatePolicy,
     extra_keys: &[String],
 ) -> Vec<Finding> {
+    check_with(items, scheme, policy, extra_keys, &[])
+}
+
+/// `check`, with the repo's own first-line words added to the ones `old-header` knows.
+pub fn check_with(
+    items: &[Item],
+    scheme: &dyn RelationScheme,
+    policy: &dyn StatePolicy,
+    extra_keys: &[String],
+    old_head_keys: &[String],
+) -> Vec<Finding> {
     let by: HashMap<u64, &Item> = items.iter().map(|it| (it.iid, it)).collect();
     let mut sorted: Vec<&Item> = items.iter().collect();
     sorted.sort_by_key(|it| it.iid);
@@ -88,6 +99,11 @@ pub fn check(
             kids.entry(p).or_default().push(it);
         }
     }
+    let refs: HashMap<u64, Vec<(&'static str, u64)>> = items
+        .iter()
+        .map(|it| (it.iid, header::refs_of(&it.desc)))
+        .collect();
+    let names = |a: u64, b: u64| refs.get(&a).is_some_and(|r| r.iter().any(|(_, n)| *n == b));
     let mut out = Vec::new();
     for it in sorted {
         let mut add = |kind: &'static str, detail: String| {
@@ -97,16 +113,23 @@ pub fn check(
                 detail,
             })
         };
-        match header::parse(&it.desc, extra_keys) {
-            Err(e) => add("header", e),
-            Ok(header::Split {
-                header: Some(h), ..
-            }) => {
-                if let Some(key) = h.naming(it.iid) {
+        let body = match header::parse(&it.desc, extra_keys) {
+            Err(e) => {
+                add("header", e);
+                header::loose(&it.desc).body
+            }
+            Ok(split) => {
+                if let Some(key) = split.header.as_ref().and_then(|h| h.naming(it.iid)) {
                     add("header", format!("`{key}` names the item itself"));
                 }
+                split.body
             }
-            Ok(_) => {}
+        };
+        if let Some(line) = header::old_head(body, old_head_keys) {
+            add(
+                "old-header",
+                format!("the body still opens with `{line}`; move it into the header"),
+            );
         }
         if it.kind == "task" {
             add("task", "still a Task".into());
@@ -115,6 +138,16 @@ pub fn check(
         if let Some(p) = p.filter(|p| !by.contains_key(p)) {
             add("missing-parent", format!("#{p} does not exist"));
         }
+        let mine = &refs[&it.iid];
+        for (key, n) in mine
+            .iter()
+            .filter(|(k, n)| *k != "parent" && !by.contains_key(n))
+        {
+            add(
+                "missing-reference",
+                format!("`{key}` names #{n}, which does not exist"),
+            );
+        }
         if let (Some(p), Some(links)) = (p, &it.links)
             && !links.contains(&p)
         {
@@ -122,6 +155,46 @@ pub fn check(
                 "unlinked",
                 format!("no relates_to link to #{p}, so tree <root> misses it"),
             );
+        }
+        if let Some(links) = &it.links {
+            for (key, n) in mine
+                .iter()
+                .filter(|(k, n)| *k != "parent" && !links.contains(n))
+            {
+                add(
+                    "unlinked",
+                    format!("no relates_to link to #{n}, named by `{key}`"),
+                );
+            }
+            for &l in links.iter().filter(|l| **l > it.iid) {
+                if !names(it.iid, l) && !names(l, it.iid) {
+                    add(
+                        "stray-link",
+                        format!("the link to #{l} is explained by no reference on either end"),
+                    );
+                }
+            }
+        }
+        let blockers = |n: u64| {
+            refs.get(&n)
+                .into_iter()
+                .flatten()
+                .filter(|(k, _)| *k == "blocked_by")
+                .map(|(_, b)| *b)
+        };
+        let (mut seen, mut stack): (HashSet<u64>, Vec<u64>) =
+            (HashSet::new(), blockers(it.iid).collect());
+        while let Some(b) = stack.pop() {
+            if b == it.iid {
+                add(
+                    "blocker-cycle",
+                    "following blocked_by leads back here".into(),
+                );
+                break;
+            }
+            if seen.insert(b) {
+                stack.extend(blockers(b));
+            }
         }
         let (mut seen, mut cur) = (HashSet::from([it.iid]), p);
         while let Some(c) = cur.filter(|c| by.contains_key(c)) {
@@ -307,9 +380,140 @@ mod tests {
         }
     }
 
+    /// A small tracker where every link is explained by one reference: #2 under #1, found while
+    /// working #3, related to #4 (written on #4's end), blocked by #5.
+    fn explained() -> Vec<Item> {
+        vec![
+            item(1, Open, "", &[2]),
+            item(
+                2,
+                Open,
+                "+++\nparent = 1\nfrom = 3\nblocked_by = [5]\n+++\n",
+                &[1, 3, 4, 5],
+            ),
+            item(3, Open, "", &[2]),
+            item(4, Open, "+++\nrelated = [2]\n+++\n", &[2]),
+            item(5, Open, "", &[2]),
+        ]
+    }
+
+    #[test]
+    fn a_tracker_whose_every_link_is_explained_is_clean() {
+        assert!(kinds(&explained()).is_empty(), "{:?}", kinds(&explained()));
+    }
+
+    #[test]
+    fn a_link_no_reference_explains_is_stray_once_at_the_lower_number() {
+        for (at, desc) in [
+            (1, "+++\nparent = 1\nblocked_by = [5]\n+++\n"),
+            (3, "+++\nparent = 1\nfrom = 3\n+++\n"),
+        ] {
+            let mut items = explained();
+            items[1].desc = desc.into();
+            let got = kinds(&items);
+            assert_eq!(got, [("stray-link", 2)], "{at}: {got:?}");
+        }
+        let mut items = explained();
+        items[3].desc = String::new();
+        assert_eq!(kinds(&items), [("stray-link", 2)]);
+    }
+
+    #[test]
+    fn a_reference_without_its_link_names_its_key() {
+        let mut items = explained();
+        items[1].links = Some(vec![1, 4]);
+        items[2].links = Some(vec![]);
+        items[4].links = Some(vec![]);
+        let found = check(&items, &FrontMatter, &RootsOnly, &[]);
+        let got: Vec<String> = found
+            .iter()
+            .map(|f| format!("{} #{} {}", f.kind, f.iid, f.detail))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "unlinked #2 no relates_to link to #3, named by `from`",
+                "unlinked #2 no relates_to link to #5, named by `blocked_by`"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reference_to_an_item_that_does_not_exist() {
+        let items = [item(
+            2,
+            Open,
+            "+++\nfrom = 98\nrelated = [99]\n+++\n",
+            &[98, 99],
+        )];
+        let found = check(&items, &FrontMatter, &RootsOnly, &[]);
+        let got: Vec<(&str, &str)> = found.iter().map(|f| (f.kind, f.detail.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "missing-reference",
+                    "`from` names #98, which does not exist"
+                ),
+                (
+                    "missing-reference",
+                    "`related` names #99, which does not exist"
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn a_blocker_cycle_is_reported_on_every_item_in_it_and_a_chain_is_not() {
+        let items = [
+            item(1, Open, "+++\nblocked_by = [2]\n+++\n", &[2, 3]),
+            item(2, Open, "+++\nblocked_by = [3]\n+++\n", &[1, 3]),
+            item(3, Open, "+++\nblocked_by = [1]\n+++\n", &[1, 2]),
+        ];
+        assert_eq!(
+            kinds(&items),
+            [
+                ("blocker-cycle", 1),
+                ("blocker-cycle", 2),
+                ("blocker-cycle", 3)
+            ]
+        );
+        let chain = [
+            item(1, Open, "+++\nblocked_by = [2]\n+++\n", &[2]),
+            item(2, Open, "+++\nblocked_by = [3]\n+++\n", &[1, 3]),
+            item(3, Open, "", &[2]),
+        ];
+        assert!(kinds(&chain).is_empty());
+    }
+
+    #[test]
+    fn a_body_still_opening_with_a_first_line_head_is_reported() {
+        let items = [
+            item(1, Open, "", &[2]),
+            item(
+                2,
+                Open,
+                "+++\nparent = 1\n+++\n\nBlocked by: #1\nbody",
+                &[1],
+            ),
+            item(3, Open, "Parent: #1\n\nbody", &[]),
+            item(4, Open, "Parent: #1 is quoted here", &[]),
+        ];
+        assert_eq!(kinds(&items), [("old-header", 2), ("old-header", 3)]);
+        let own = [item(5, Open, "Origin: #1\n\nbody", &[])];
+        assert!(kinds(&own).is_empty());
+        let found = check_with(&own, &FrontMatter, &RootsOnly, &[], &["Origin".into()]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].kind, "old-header");
+    }
+
     #[test]
     fn an_old_first_line_makes_no_parent() {
-        assert!(kinds(&[item(1, Open, "", &[]), item(2, Open, "Parent: #1", &[])]).is_empty());
+        // reported as an unmigrated head, never as a child of #1 (no unlinked, no policy finding)
+        assert_eq!(
+            kinds(&[item(1, Open, "", &[]), item(2, Open, "Parent: #1", &[])]),
+            [("old-header", 2)]
+        );
     }
 
     #[test]

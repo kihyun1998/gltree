@@ -188,7 +188,13 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Check { snapshot, json } => {
             let items = source(snapshot)?.all_items()?;
-            let found = check::check(&items, scheme.as_ref(), policy.as_ref(), &config.extra_keys);
+            let found = check::check_with(
+                &items,
+                scheme.as_ref(),
+                policy.as_ref(),
+                &config.extra_keys,
+                &config.old_head_keys,
+            );
             if json {
                 writeln!(
                     out,
@@ -300,7 +306,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 writeln!(
                     out,
                     "{}",
-                    serde_json::to_string_pretty(&roots::to_json(&found))?
+                    serde_json::to_string_pretty(&roots::to_json(&found, &tree::states(&items)))?
                 )?;
             } else {
                 for line in roots::render(&found) {

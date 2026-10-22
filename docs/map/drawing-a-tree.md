@@ -16,8 +16,13 @@ How gltree turns a tracker's items into the tree text and JSON (`src/tree.rs`, `
   and every tree golden is unchanged byte for byte.
 - A cycle ends where the path meets itself: each node remembers the items from the root down to
   it, not every item seen, so the counts equal the Python tool's per-path counting.
-- The JSON is `{version, roots: [node]}` with `node = {number, title, state, closed, total,
-  children}`. Raise `JSON_VERSION` on any change a reader could notice.
+- An item with an open blocker ends its line with `  blocked by #B, #C`, after `closed/total`; a
+  closed blocker, and one the tracker does not hold, are left out. A fixture with no `blocked_by`
+  draws exactly what the Python tool drew.
+- A live tree knows its own items' states; the blockers outside it cost one more `level` request,
+  for all of them at once.
+- The JSON (version 2) is `{version, roots: [node]}` with `node = {number, title, state, closed,
+  total, blocked_by_open, children}`. Raise `JSON_VERSION` on any change a reader could notice.
 
 ## Known holes / open
 

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The version of the JSON shape `to_json` prints.
-pub const JSON_VERSION: u32 = 1;
+pub const JSON_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
@@ -16,6 +16,8 @@ pub struct Node {
     pub state: State,
     pub closed: usize,
     pub total: usize,
+    /// The items its `blocked_by` names that are still open.
+    pub blocked_by_open: Vec<u64>,
     pub children: Vec<Node>,
 }
 
@@ -25,16 +27,55 @@ pub fn tree(
     scheme: &dyn RelationScheme,
     root: Option<u64>,
 ) -> Result<Vec<Node>, Error> {
-    draw(&tracker.all_items()?, scheme, root)
+    let items = tracker.all_items()?;
+    draw(&items, &states(&items), scheme, root)
 }
 
-/// The tree under `root`, reading only that tree: one `level` request per depth along the links.
+/// The tree under `root`, reading only that tree: one `level` request per depth along the links,
+/// and one more for the blockers outside it.
 pub fn live_tree(
     tracker: &dyn Tracker,
     scheme: &dyn RelationScheme,
     root: u64,
 ) -> Result<Vec<Node>, Error> {
-    draw(&subtree(tracker, scheme, root)?, scheme, Some(root))
+    let items = subtree(tracker, scheme, root)?;
+    let mut known = states(&items);
+    let outside: Vec<u64> = blockers(&items)
+        .into_iter()
+        .filter(|b| !known.contains_key(b))
+        .collect();
+    if !outside.is_empty() {
+        for (n, l) in tracker.level(&outside)? {
+            known.insert(n, l.item.state);
+        }
+    }
+    draw(&items, &known, scheme, Some(root))
+}
+
+/// Each item's state by number.
+pub fn states(items: &[Item]) -> HashMap<u64, State> {
+    items.iter().map(|it| (it.iid, it.state)).collect()
+}
+
+/// Every item the given items' `blocked_by` names, once each, in ascending order.
+fn blockers(items: &[Item]) -> Vec<u64> {
+    let set: std::collections::BTreeSet<u64> = items
+        .iter()
+        .flat_map(|it| crate::header::refs_of(&it.desc))
+        .filter(|(k, _)| *k == "blocked_by")
+        .map(|(_, b)| b)
+        .collect();
+    set.into_iter().collect()
+}
+
+/// The items `desc`'s `blocked_by` names that are open in `states`; an item the states do not know
+/// is left out, since `check` reports it as missing.
+pub fn open_blockers(desc: &str, states: &HashMap<u64, State>) -> Vec<u64> {
+    crate::header::refs_of(desc)
+        .into_iter()
+        .filter(|(k, b)| *k == "blocked_by" && states.get(b) == Some(&State::Open))
+        .map(|(_, b)| b)
+        .collect()
 }
 
 /// `root` and its descendants. A linked item is a child only when the scheme names the node as its parent.
@@ -71,6 +112,7 @@ pub fn subtree(
 
 fn draw(
     items: &[Item],
+    states: &HashMap<u64, State>,
     scheme: &dyn RelationScheme,
     root: Option<u64>,
 ) -> Result<Vec<Node>, Error> {
@@ -94,7 +136,7 @@ fn draw(
     };
     Ok(roots
         .into_iter()
-        .map(|r| node(r, &by, &kids, &mut HashSet::from([r])))
+        .map(|r| node(r, &by, &kids, states, &mut HashSet::from([r])))
         .collect())
 }
 
@@ -103,13 +145,14 @@ fn node(
     n: u64,
     by: &HashMap<u64, &Item>,
     kids: &BTreeMap<u64, Vec<&Item>>,
+    states: &HashMap<u64, State>,
     path: &mut HashSet<u64>,
 ) -> Node {
     let it = by[&n];
     let mut children = Vec::new();
     for c in kids.get(&n).map(Vec::as_slice).unwrap_or_default() {
         if path.insert(c.iid) {
-            children.push(node(c.iid, by, kids, path));
+            children.push(node(c.iid, by, kids, states, path));
             path.remove(&c.iid);
         }
     }
@@ -124,11 +167,13 @@ fn node(
         state: it.state,
         closed,
         total,
+        blocked_by_open: open_blockers(&it.desc, states),
         children,
     }
 }
 
-/// The tree as text: `#N [state] title`, then `  closed/total` when it has descendants, two spaces per depth.
+/// The tree as text: `#N [state] title`, then `  closed/total` when it has descendants and
+/// `  blocked by #B, #C` while any blocker is open, two spaces per depth.
 pub fn render(nodes: &[Node]) -> Vec<String> {
     let mut lines = Vec::new();
     for n in nodes {
@@ -138,11 +183,15 @@ pub fn render(nodes: &[Node]) -> Vec<String> {
 }
 
 fn render_into(n: &Node, depth: usize, lines: &mut Vec<String>) {
-    let tail = if n.total > 0 {
+    let mut tail = if n.total > 0 {
         format!("  {}/{}", n.closed, n.total)
     } else {
         String::new()
     };
+    if !n.blocked_by_open.is_empty() {
+        let bs: Vec<String> = n.blocked_by_open.iter().map(|b| format!("#{b}")).collect();
+        tail.push_str(&format!("  blocked by {}", bs.join(", ")));
+    }
     lines.push(format!(
         "{}#{} [{}] {}{}",
         "  ".repeat(depth),
@@ -163,6 +212,7 @@ pub fn to_json(nodes: &[Node]) -> Value {
 fn node_json(n: &Node) -> Value {
     json!({
         "number": n.iid, "title": n.title, "state": n.state.as_str(), "closed": n.closed, "total": n.total,
+        "blocked_by_open": n.blocked_by_open,
         "children": n.children.iter().map(node_json).collect::<Vec<_>>(),
     })
 }
@@ -179,6 +229,28 @@ mod tests {
 
     fn draw(items: Vec<Item>, root: Option<u64>) -> Vec<String> {
         render(&tree(&FakeTracker::new(items), &FrontMatter, root).unwrap())
+    }
+
+    #[test]
+    fn an_item_with_an_open_blocker_says_so_and_a_closed_blocker_is_dropped() {
+        let mut items = three_levels();
+        items[2].desc = "+++\nparent = 1\nblocked_by = [2, 5, 99]\n+++\n".into();
+        let lines = draw(items.clone(), Some(1));
+        assert_eq!(lines[2], "  #3 [open] t3  1/2  blocked by #5");
+        let v = to_json(&tree(&FakeTracker::new(items), &FrontMatter, Some(1)).unwrap());
+        assert_eq!(v["version"], 2);
+        assert_eq!(v["roots"][0]["children"][1]["blocked_by_open"], json!([5]));
+    }
+
+    #[test]
+    fn a_live_tree_reads_the_blockers_outside_it_in_one_more_request() {
+        let mut items = three_levels();
+        items.push(Item::new(7, State::Open, "elsewhere", ""));
+        items[4].desc = "+++\nparent = 3\nblocked_by = [7]\n+++\n".into();
+        let t = FakeTracker::new(linked(items));
+        let lines = render(&live_tree(&t, &FrontMatter, 3).unwrap());
+        assert_eq!(lines[2], "  #5 [open] t5  blocked by #7");
+        assert_eq!(t.levels.borrow().last().unwrap(), &vec![7]);
     }
 
     fn three_levels() -> Vec<Item> {
@@ -349,12 +421,12 @@ mod tests {
         assert_eq!(
             v,
             json!({
-                "version": 1,
+                "version": 2,
                 "roots": [{
-                    "number": 3, "title": "t3", "state": "open", "closed": 1, "total": 2,
+                    "number": 3, "title": "t3", "state": "open", "closed": 1, "total": 2, "blocked_by_open": [],
                     "children": [
-                        {"number": 4, "title": "t4", "state": "closed", "closed": 0, "total": 0, "children": []},
-                        {"number": 5, "title": "t5", "state": "open", "closed": 0, "total": 0, "children": []}
+                        {"number": 4, "title": "t4", "state": "closed", "closed": 0, "total": 0, "blocked_by_open": [], "children": []},
+                        {"number": 5, "title": "t5", "state": "open", "closed": 0, "total": 0, "blocked_by_open": [], "children": []}
                     ]
                 }]
             })

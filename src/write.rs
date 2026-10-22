@@ -399,7 +399,7 @@ mod tests {
                 2,
                 State::Open,
                 "t2",
-                "+++\nparent = 1\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody",
+                "+++\nparent = 1\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nWaits on the store.\nbody",
             ),
             Item::new(3, State::Open, "t3", &p(2)),
             Item::new(4, State::Open, "t4", "lone"),
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(writes, ["desc #2", "link #4 #2", "unlink #1 #2"]);
         assert_eq!(
             t.item(2).unwrap().desc,
-            "+++\nparent = 4\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody"
+            "+++\nparent = 4\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nWaits on the store.\nbody"
         );
         assert!(clean(&t).is_empty(), "{:?}", clean(&t));
     }
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!((m.from, m.to), (Some(1), None));
         assert_eq!(
             t.item(2).unwrap().desc,
-            "+++\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nBlocked by: #4\nbody"
+            "+++\nrelated = [4]\n\n[notes]\nrelated = \"same screen\"\n+++\n\nWaits on the store.\nbody"
         );
         assert_eq!(*t.writes.borrow(), ["desc #2", "unlink #1 #2"]);
         move_item(&t, &rules(true), 3, None).unwrap();

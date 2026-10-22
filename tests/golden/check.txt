@@ -1,3 +1,4 @@
+old-header                 #4  the body still opens with `Blocked by: #2`; move it into the header
 missing-parent             #8  #99 does not exist
 unlinked                   #8  no relates_to link to #99, so tree <root> misses it
 cycle                      #9  following parents leads back here
@@ -6,4 +7,4 @@ closed-parent-open-child   #12  closed, with an open descendant
 header                     #14  the header is not valid TOML: string values must be quoted, expected literal string
 task                       #14  still a Task
 open-parent-all-closed     #15  open, every descendant closed
-8 anomalies
+9 anomalies

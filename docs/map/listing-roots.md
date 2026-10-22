@@ -16,6 +16,7 @@ How `gltree roots` lists the tracker's roots for tools that act on finished feat
   marker (a registration key, say) from `extra` without fetching the body, and `first_line` — the
   body's first line after the header and its blank lines, without a trailing CR. `from` is null
   for a root that was not found while working another item; a find with no parent is a root.
+  `blocked_by_open` lists the root's blockers that are open, judged from the same full read.
 - The header is read loosely here (`header::loose`): every `[extra]` key is taken whatever the
   repo config declares, and a header out of form yields no `from` or `extra` rather than an error,
   since listing is not checking.

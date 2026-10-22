@@ -76,8 +76,9 @@ gltree tree 12 --snapshot tracker.json --json   # the same tree as JSON
     #19 [open] Trailing space on the line
 ```
 
-Each node shows its state, and `closed/total` of its descendants when it has any. `--json` prints
-`{"version": 1, "roots": [node]}`, where a node is `{number, title, state, closed, total, children}`.
+Each node shows its state, `closed/total` of its descendants when it has any, and
+`blocked by #B` while a blocker is open. `--json` prints `{"version": 2, "roots": [node]}`, where a
+node is `{number, title, state, closed, total, blocked_by_open, children}`.
 
 A snapshot is a JSON list of items (`iid`, `title`, `state`, `desc`, and optionally `labels` and
 `links`). Every root's tree (`gltree tree` with no number) reads every item.
@@ -95,9 +96,12 @@ unlinked                   #19  no relates_to link to #13, so tree <root> misses
 1 anomalies
 ```
 
-Kinds: `header` (a block out of form, with the reason), `task`, `missing-parent`, `unlinked`,
-`cycle`, `closed-parent-open-child`, `open-parent-all-closed`. `--json` prints
-`{"version": 1, "findings": [{kind, item, detail}]}`.
+Kinds: `header` (a block out of form, with the reason), `old-header` (a body still opening with a
+first-line head such as `Blocked by: #4`), `task`, `missing-parent`, `missing-reference`,
+`unlinked`, `stray-link` (a link no reference on either end explains), `blocker-cycle`, `cycle`,
+`closed-parent-open-child`, `open-parent-all-closed`. Every number under `parent`, `from`,
+`related` and `blocked_by` needs its `relates_to` link, and every link needs a reference.
+`--json` prints `{"version": 1, "findings": [{kind, item, detail}]}`.
 
 ## Roots
 
@@ -109,8 +113,9 @@ gltree roots --closed-since 2026-10-19 --closed-until 2026-10-25 --label SPEC
 Lists items with no `parent`, filtered with AND: `--open` / `--closed`, `--label` (all of
 them), `--without-label` (none of them; a trailing `*` matches a prefix), and an inclusive UTC
 closing-date range that implies `--closed`. Text: `#N [state] closed:<date|-> labels:<a,b> title`.
-`--json` prints `{"version": 2, "roots": [{number, title, state, labels, closed_at, first_line, url, from, extra}]}`,
-where `first_line` is the body's first line after the header.
+`--json` prints `{"version": 2, "roots": [{number, title, state, labels, closed_at, first_line, url, from, extra, blocked_by_open}]}`,
+where `first_line` is the body's first line after the header and `blocked_by_open` the blockers
+still open.
 
 ## New
 
@@ -150,6 +155,7 @@ root_label = "SPEC"
 relation_scheme = "front-matter"  # known: front-matter
 state_policy = "roots-only"       # or "every-parent": every parent stays open while a child is open
 extra_keys = ["marker"]           # keys the header's [extra] may hold, kept as written
+old_head_keys = ["Origin"]        # the repo's own first-line words, so check reports one left in a body
 ```
 
 Exit status: 0 on success, 1 when `check` finds anything, 2 on a usage, input, config or server error.

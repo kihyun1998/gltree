@@ -5,6 +5,7 @@ use crate::item::{Item, State};
 use crate::scheme::RelationScheme;
 use crate::tracker::Error;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 /// The version of the JSON shape `to_json` prints.
 pub const JSON_VERSION: u32 = 2;
@@ -122,8 +123,9 @@ pub fn render(roots: &[&Item]) -> Vec<String> {
         .collect()
 }
 
-/// `first_line` is the body's first line after the header; `from` and `extra` come from the header.
-pub fn to_json(roots: &[&Item]) -> Value {
+/// `first_line` is the body's first line after the header; `from` and `extra` come from the header;
+/// `blocked_by_open` lists the blockers `states` holds as open.
+pub fn to_json(roots: &[&Item], states: &HashMap<u64, State>) -> Value {
     let list: Vec<Value> = roots
         .iter()
         .map(|it| {
@@ -145,6 +147,7 @@ pub fn to_json(roots: &[&Item]) -> Value {
                 "url": it.url,
                 "from": h.from,
                 "extra": extra,
+                "blocked_by_open": crate::tree::open_blockers(&it.desc, states),
             })
         })
         .collect();
@@ -325,7 +328,10 @@ mod tests {
     #[test]
     fn the_first_line_of_a_crlf_body_has_no_cr() {
         let crlf = it(9, State::Closed, "Done\r\nbody", &[], None);
-        assert_eq!(to_json(&[&crlf])["roots"][0]["first_line"], "Done");
+        assert_eq!(
+            to_json(&[&crlf], &HashMap::new())["roots"][0]["first_line"],
+            "Done"
+        );
     }
 
     #[test]
@@ -337,18 +343,33 @@ mod tests {
             &[],
             None,
         );
-        let v = &to_json(&[&found])["roots"][0];
+        let v = &to_json(&[&found], &HashMap::new())["roots"][0];
         assert_eq!(
             (v["from"].clone(), v["extra"]["marker"].clone()),
             (json!(3), json!("K-1 (x)"))
         );
         assert_eq!(v["first_line"], "What happens");
         let bare = it(8, State::Closed, "text", &[], None);
-        let v = &to_json(&[&bare])["roots"][0];
+        let v = &to_json(&[&bare], &HashMap::new())["roots"][0];
         assert_eq!(
             (v["from"].clone(), v["extra"].clone()),
             (Value::Null, json!({}))
         );
+    }
+
+    #[test]
+    fn json_carries_the_open_blockers_of_each_root() {
+        let all = items();
+        let mut r = it(
+            7,
+            State::Open,
+            "+++\nblocked_by = [1, 4, 99]\n+++\n",
+            &[],
+            None,
+        );
+        r.links = Some(vec![1, 4]);
+        let v = &to_json(&[&r], &crate::tree::states(&all))["roots"][0];
+        assert_eq!(v["blocked_by_open"], json!([4]));
     }
 
     #[test]
@@ -362,7 +383,7 @@ mod tests {
                 "#4 [open] closed:- labels:SPEC t4"
             ]
         );
-        let v = to_json(&picked);
+        let v = to_json(&picked, &crate::tree::states(&all));
         assert_eq!(v["version"], 2);
         assert_eq!(v["roots"][0]["first_line"], "REG: K-1");
         assert_eq!(v["roots"][0]["closed_at"], "2026-10-19T23:59:59Z");

@@ -18,6 +18,9 @@ pub struct RepoConfig {
     pub state_policy: String,
     /// The keys the repo's header may hold under `[extra]`, kept as written and never read.
     pub extra_keys: Vec<String>,
+    /// The repo's own words of the first-line format, beyond the ones `check` knows, so a body
+    /// still opening with one is reported as `old-header`.
+    pub old_head_keys: Vec<String>,
     /// Whether the repo committed a config file, which is what lets gltree write to its tracker.
     pub present: bool,
 }
@@ -29,6 +32,7 @@ struct File {
     relation_scheme: Option<String>,
     state_policy: Option<String>,
     extra_keys: Option<Vec<String>>,
+    old_head_keys: Option<Vec<String>>,
 }
 
 impl RepoConfig {
@@ -38,6 +42,7 @@ impl RepoConfig {
             relation_scheme: SCHEMES[0].into(),
             state_policy: POLICIES[0].into(),
             extra_keys: vec![],
+            old_head_keys: vec![],
             present: false,
         }
     }
@@ -73,6 +78,7 @@ impl RepoConfig {
             )?,
             state_policy: known("state_policy", f.state_policy, POLICIES, d.state_policy)?,
             extra_keys,
+            old_head_keys: f.old_head_keys.unwrap_or_default(),
             present: true,
         })
     }
@@ -149,11 +155,12 @@ mod tests {
     #[test]
     fn each_value_can_be_set() {
         let c = RepoConfig::parse(Some(
-            "root_label = \"PRD\"\nrelation_scheme = \"front-matter\"\nstate_policy = \"roots-only\"\nextra_keys = [\"marker\", \"x-y_2\"]\n",
+            "root_label = \"PRD\"\nrelation_scheme = \"front-matter\"\nstate_policy = \"roots-only\"\nextra_keys = [\"marker\", \"x-y_2\"]\nold_head_keys = [\"Origin\"]\n",
         ))
         .unwrap();
         assert_eq!(c.root_label, "PRD");
         assert_eq!(c.extra_keys, ["marker", "x-y_2"]);
+        assert_eq!(c.old_head_keys, ["Origin"]);
     }
 
     #[test]
