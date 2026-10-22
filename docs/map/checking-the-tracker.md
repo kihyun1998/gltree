@@ -21,10 +21,14 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 - State policy `roots-only`: only an item with no parent at all is judged — a root closed with an
   open descendant, or open with every descendant closed. An item under a missing parent is not a
   root. Descendants are walked to any depth.
+- State policy `every-parent`: every item with children is judged on its **direct** children —
+  closed with an open child, or open with every child closed. A closed grandparent over a closed
+  child and an open grandchild is not reported; the child is. This matches the tool of the
+  consumer whose `Parent:` means "part of".
 - The full read is paged GraphQL (100 items a page) with type, labels and link ends; a node whose
   links overflow one page is an error, since `unlinked` and `stray-link` need every link.
 - The repo config `.gltree.toml` sits at `git rev-parse --show-toplevel`: `root_label` (default
-  `SPEC`), `relation_scheme` (`parent-line`), `state_policy` (`roots-only`), `links` (`tree-only`,
+  `SPEC`), `relation_scheme` (`parent-line`), `state_policy` (`roots-only`, or `every-parent`), `links` (`tree-only`,
   or `shared` for a repo that also links related issues). Unknown keys and
   unknown values fail, listing the known values. Absent file: defaults, and `present = false`,
   which #5's write commands read as "this repo has not opted in".

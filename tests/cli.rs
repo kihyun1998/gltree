@@ -156,7 +156,7 @@ fn an_unknown_state_policy_in_the_repo_config_stops_every_command() {
     );
     std::fs::write(
         dir.join(".gltree.toml"),
-        "state_policy = \"every-parent\"\n",
+        "state_policy = \"leaf-only\"\n",
     )
     .unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
@@ -168,7 +168,7 @@ fn an_unknown_state_policy_in_the_repo_config_stops_every_command() {
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains("every-parent") && err.contains("roots-only"),
+        err.contains("leaf-only") && err.contains("roots-only"),
         "{err}"
     );
 }

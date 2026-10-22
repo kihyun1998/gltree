@@ -1,6 +1,6 @@
 //! The repo config: `.gltree.toml` at a consuming repo's root, saying it uses gltree and how.
 
-use crate::check::{Links, RootsOnly, StatePolicy};
+use crate::check::{EveryParent, Links, RootsOnly, StatePolicy};
 use crate::scheme::{ParentLine, RelationScheme};
 use crate::tracker::Error;
 use serde::Deserialize;
@@ -9,7 +9,7 @@ use std::process::Command;
 
 pub const FILE: &str = ".gltree.toml";
 pub const SCHEMES: &[&str] = &["parent-line"];
-pub const POLICIES: &[&str] = &["roots-only"];
+pub const POLICIES: &[&str] = &["roots-only", "every-parent"];
 pub const LINKS: &[&str] = &["tree-only", "shared"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +79,10 @@ impl RepoConfig {
 
     /// The policy `state_policy` names; `parse` admits only the names in `POLICIES`.
     pub fn policy(&self) -> Box<dyn StatePolicy> {
-        Box::new(RootsOnly)
+        match self.state_policy.as_str() {
+            "every-parent" => Box::new(EveryParent),
+            _ => Box::new(RootsOnly),
+        }
     }
 
     pub fn links(&self) -> Links {
@@ -150,11 +153,30 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("hierarchy") && e.contains("parent-line"), "{e}");
-        let e = RepoConfig::parse(Some("state_policy = \"every-parent\""))
+        let e = RepoConfig::parse(Some("state_policy = \"leaf-only\""))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("leaf-only") && e.contains("roots-only"), "{e}");
+    }
+
+    #[test]
+    fn every_parent_is_a_known_policy_and_unknown_ones_list_both() {
+        let c = RepoConfig::parse(Some("state_policy = \"every-parent\"")).unwrap();
+        assert_eq!(c.state_policy, "every-parent");
+        // the name reaches the policy itself: a closed non-root over an open child is judged
+        use crate::check::Family;
+        use crate::item::{Item, State};
+        let parent = Item::new(2, State::Closed, "t2", "Parent: #1");
+        let child = Item::new(3, State::Open, "t3", "Parent: #2");
+        let kids = [&child];
+        let family = Family { is_root: false, children: &kids, descendants: &kids };
+        assert!(c.policy().judge(&parent, &family).is_some());
+        assert!(RepoConfig::defaults().policy().judge(&parent, &family).is_none());
+        let e = RepoConfig::parse(Some("state_policy = \"leaf-only\""))
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("every-parent") && e.contains("roots-only"),
+            e.contains("roots-only") && e.contains("every-parent"),
             "{e}"
         );
     }

@@ -15,27 +15,46 @@ pub struct Finding {
     pub detail: String,
 }
 
-/// The rule for when an item may be closed or open against its descendants.
+/// What a state policy sees of an item's place in the tree.
+pub struct Family<'a> {
+    pub is_root: bool,
+    pub children: &'a [&'a Item],
+    pub descendants: &'a [&'a Item],
+}
+
+/// The rule for when an item may be closed or open against the items below it.
 pub trait StatePolicy {
-    /// A finding for `item`, given whether it is a root and its descendants.
-    fn judge(
-        &self,
-        item: &Item,
-        is_root: bool,
-        descendants: &[&Item],
-    ) -> Option<(&'static str, &'static str)>;
+    fn judge(&self, item: &Item, family: &Family) -> Option<(&'static str, &'static str)>;
 }
 
 /// A root closes when every descendant is closed; anything below a root closes on its own work.
 pub struct RootsOnly;
 
+/// Every parent stays open while any direct child is open, and closes when all of them are.
+pub struct EveryParent;
+
+impl StatePolicy for EveryParent {
+    fn judge(&self, item: &Item, family: &Family) -> Option<(&'static str, &'static str)> {
+        let children = family.children;
+        if children.is_empty() {
+            return None;
+        }
+        let any_open = children.iter().any(|c| c.state == State::Open);
+        match item.state {
+            State::Closed if any_open => {
+                Some(("closed-parent-open-child", "closed, with an open child"))
+            }
+            State::Open if !any_open => {
+                Some(("open-parent-all-closed", "open, every child closed"))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl StatePolicy for RootsOnly {
-    fn judge(
-        &self,
-        item: &Item,
-        is_root: bool,
-        descendants: &[&Item],
-    ) -> Option<(&'static str, &'static str)> {
+    fn judge(&self, item: &Item, family: &Family) -> Option<(&'static str, &'static str)> {
+        let (is_root, descendants) = (family.is_root, family.descendants);
         if !is_root || descendants.is_empty() {
             return None;
         }
@@ -139,7 +158,13 @@ pub fn check(
             cur = scheme.parent_of(by[&c]);
         }
         let ds = descendants(it.iid, &kids);
-        if let Some((kind, detail)) = policy.judge(it, p.is_none(), &ds) {
+        let cs = kids.get(&it.iid).cloned().unwrap_or_default();
+        let family = Family {
+            is_root: p.is_none(),
+            children: &cs,
+            descendants: &ds,
+        };
+        if let Some((kind, detail)) = policy.judge(it, &family) {
             add(kind, detail.into());
         }
     }
@@ -191,6 +216,61 @@ mod tests {
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
+    }
+
+    fn every(items: &[Item]) -> Vec<(&'static str, u64)> {
+        check(items, &ParentLine, &EveryParent, Links::TreeOnly)
+            .iter()
+            .map(|f| (f.kind, f.iid))
+            .collect()
+    }
+
+    #[test]
+    fn every_parent_holds_a_closed_slice_to_its_open_child_at_any_depth() {
+        let items = [
+            item(1, Open, "", &[2]),
+            item(2, Closed, "Parent: #1", &[1, 3]),
+            item(3, Open, "Parent: #2", &[2]),
+        ];
+        // #1 is open over its only child #2, which is closed: that is reported too
+        assert_eq!(
+            every(&items),
+            [
+                ("open-parent-all-closed", 1),
+                ("closed-parent-open-child", 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn every_parent_reports_an_open_parent_whose_children_are_all_closed() {
+        let items = [
+            item(1, Open, "", &[2]),
+            item(2, Open, "Parent: #1", &[1, 3]),
+            item(3, Closed, "Parent: #2", &[2]),
+        ];
+        assert_eq!(every(&items), [("open-parent-all-closed", 2)]);
+    }
+
+    #[test]
+    fn every_parent_judges_direct_children_only() {
+        // #1 is closed, its child #2 closed, its grandchild #3 open: only #2 is reported
+        let items = [
+            item(1, Closed, "", &[2]),
+            item(2, Closed, "Parent: #1", &[1, 3]),
+            item(3, Open, "Parent: #2", &[2]),
+        ];
+        assert_eq!(every(&items), [("closed-parent-open-child", 2)]);
+    }
+
+    #[test]
+    fn every_parent_leaves_a_consistent_tree_and_a_childless_item_alone() {
+        let items = [
+            item(1, Open, "", &[2]),
+            item(2, Open, "Parent: #1", &[1]),
+            item(4, Closed, "", &[]),
+        ];
+        assert!(every(&items).is_empty());
     }
 
     use State::{Closed, Open};

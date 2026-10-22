@@ -116,7 +116,7 @@ A consuming repo commits `.gltree.toml` at its root; every key is optional:
 ```toml
 root_label = "SPEC"
 relation_scheme = "parent-line"   # known: parent-line
-state_policy = "roots-only"       # known: roots-only
+state_policy = "roots-only"       # or "every-parent": every parent stays open while a child is open
 links = "tree-only"               # or "shared": links also join related issues, no stray-link
 ```
 
