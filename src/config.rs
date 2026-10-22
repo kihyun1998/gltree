@@ -169,9 +169,18 @@ mod tests {
         let parent = Item::new(2, State::Closed, "t2", "Parent: #1");
         let child = Item::new(3, State::Open, "t3", "Parent: #2");
         let kids = [&child];
-        let family = Family { is_root: false, children: &kids, descendants: &kids };
+        let family = Family {
+            is_root: false,
+            children: &kids,
+            descendants: &kids,
+        };
         assert!(c.policy().judge(&parent, &family).is_some());
-        assert!(RepoConfig::defaults().policy().judge(&parent, &family).is_none());
+        assert!(
+            RepoConfig::defaults()
+                .policy()
+                .judge(&parent, &family)
+                .is_none()
+        );
         let e = RepoConfig::parse(Some("state_policy = \"leaf-only\""))
             .unwrap_err()
             .to_string();

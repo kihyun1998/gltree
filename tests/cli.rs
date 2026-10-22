@@ -154,11 +154,7 @@ fn an_unknown_state_policy_in_the_repo_config_stops_every_command() {
             .unwrap()
             .success()
     );
-    std::fs::write(
-        dir.join(".gltree.toml"),
-        "state_policy = \"leaf-only\"\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join(".gltree.toml"), "state_policy = \"leaf-only\"\n").unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
     let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
         .args(["check", "--snapshot", fixture.to_str().unwrap()])
