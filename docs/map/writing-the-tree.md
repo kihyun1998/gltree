@@ -34,6 +34,15 @@ the tracker port, `create_item` / `add_link` in `src/gitlab.rs`).
   blank line, as `new` writes them; a header left empty by `--to-root` goes with the one blank line
   under it, so `new` then `move --to-root` gives the text back. `move` never changes `from`.
 - `remove_link` finds the link's id in the item's links answer and deletes it; no link is success.
+- `new` and `move` write the truth and its links only; the lists on the other end (`children`,
+  `blocks`, the `related` mirror) are `sync`'s, and `check` reports them as `derived` until it runs.
+- `sync N` (`src/derived.rs`) reads one `level`: N and the items linked to it, which are every item
+  that can name N, since a reference without its link is itself a finding. `sync` with no item
+  reads the whole tracker once and indexes who names whom. Both rewrite only items whose lists
+  change, through `with_header`, so the truth, `[notes]`, `[extra]` and the body stay as they are;
+  a header out of form is refused, since rewriting it would drop what it cannot read.
+- `related` is synced to the union of both ends: a mirror is added, never taken away, so removing
+  a related item is an edit on both ends, not a sync.
 
 ## Traps
 

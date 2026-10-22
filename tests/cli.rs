@@ -132,7 +132,7 @@ fn a_clean_tracker_checks_with_exit_0() {
     let snap = dir.join("clean.json");
     std::fs::write(
         &snap,
-        r#"[{"iid": 1, "title": "a", "state": "open", "desc": "", "links": [2]},
+        r#"[{"iid": 1, "title": "a", "state": "open", "desc": "+++\nchildren = [2]\n+++\n", "links": [2]},
             {"iid": 2, "title": "b", "state": "open", "desc": "+++\nparent = 1\n+++\n", "links": [1]}]"#,
     )
     .unwrap();
@@ -253,6 +253,45 @@ fn move_in_a_repo_without_a_repo_config_is_refused_before_reaching_the_server() 
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains(".gltree.toml") && !err.contains("origin"),
+        "{err}"
+    );
+}
+
+#[test]
+fn sync_writes_only_with_a_repo_config_and_a_dry_run_needs_none() {
+    let dir = std::env::temp_dir().join("gltree-sync-no-config");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_gltree"))
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let (code, err) = run(&["sync", "2"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        err.contains(".gltree.toml") && !err.contains("origin"),
+        "{err}"
+    );
+    // a dry run passes the opt-in and stops only at the missing remote
+    let (code, err) = run(&["sync", "2", "--dry-run"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        !err.contains(".gltree.toml") && err.contains("origin"),
         "{err}"
     );
 }

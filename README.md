@@ -98,7 +98,8 @@ unlinked                   #19  no relates_to link to #13, so tree <root> misses
 
 Kinds: `header` (a block out of form, with the reason), `old-header` (a body still opening with a
 first-line head such as `Blocked by: #4`), `task`, `missing-parent`, `missing-reference`,
-`unlinked`, `stray-link` (a link no reference on either end explains), `blocker-cycle`, `cycle`,
+`unlinked`, `stray-link` (a link no reference on either end explains), `derived` (a list gltree
+keeps that the truth does not give; `gltree sync` rewrites it), `blocker-cycle`, `cycle`,
 `closed-parent-open-child`, `open-parent-all-closed`. Every number under `parent`, `from`,
 `related` and `blocked_by` needs its `relates_to` link, and every link needs a reference.
 `--json` prints `{"version": 1, "findings": [{kind, item, detail}]}`.
@@ -145,6 +146,23 @@ out of form, a target that is #19's `from`, #19 or below it, or a closed target 
 would then report, and says so and writes nothing when #19 already has that parent. Like `new`, it
 writes only in a repo with `.gltree.toml`. `--json` prints `{"version": 1, "item", "from", "to", "changed"}`,
 where `from` and `to` are the parent before and after.
+
+## Sync
+
+```sh
+gltree sync 12 --dry-run    # what #12's children, blocks and related should be, written nowhere
+gltree sync 12              # rewrite them
+gltree sync                 # every item, from one read of the whole tracker
+```
+
+Rewrites the lists gltree keeps from the truth on the other end: `children` from the items whose
+`parent` is #12, `blocks` from those whose `blocked_by` names it, and `related` as the union of
+both ends. Nothing else in the header or the body changes, and an item already right is not
+written, so a second run writes nothing. `sync 12` reads #12 with the items linked to it — every
+reference has a link — so a reference without its link is not seen until `check`'s `unlinked` is
+fixed. It refuses a header out of form. Writing needs `.gltree.toml`; `--dry-run` does not.
+Text: `#N key [before] -> [after]` per change; `--json` prints
+`{"version": 1, "written", "changes": [{item, key, before, after}]}`.
 
 ## Repo config
 

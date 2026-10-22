@@ -2,6 +2,7 @@
 
 pub mod check;
 pub mod config;
+pub mod derived;
 pub mod gitlab;
 pub mod header;
 pub mod item;

@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use gltree::check;
 use gltree::config::RepoConfig;
+use gltree::derived;
 use gltree::gitlab::GitLab;
 use gltree::item::State;
 use gltree::login;
@@ -106,6 +107,18 @@ enum Command {
         /// Read the tracker from a snapshot file instead of the server
         #[arg(long)]
         snapshot: Option<PathBuf>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rewrite the lists gltree keeps — children, blocks, the related mirror — from the truth
+    Sync {
+        /// One item, as `N` or `#N`, read with the items linked to it; every item without it
+        #[arg(value_parser = parse_iid)]
+        item: Option<u64>,
+        /// Report what would change and write nothing
+        #[arg(long)]
+        dry_run: bool,
         /// Print JSON instead of text
         #[arg(long)]
         json: bool,
@@ -310,6 +323,32 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 )?;
             } else {
                 for line in roots::render(&found) {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Sync {
+            item,
+            dry_run,
+            json,
+        } => {
+            if !dry_run {
+                write::require_opt_in(config.present)?;
+            }
+            let tracker = server()?;
+            let changes = match item {
+                Some(n) => derived::sync_one(&tracker, &config.extra_keys, n, dry_run)?,
+                None => derived::sync_all(&tracker, &config.extra_keys, dry_run)?,
+            };
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&derived::to_json(&changes, dry_run))?
+                )?;
+            } else {
+                for line in derived::render(&changes, dry_run) {
                     writeln!(out, "{line}")?;
                 }
             }

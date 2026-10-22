@@ -284,7 +284,10 @@ mod tests {
         l.iter().map(|s| s.to_string()).collect()
     }
 
+    /// `check` after `sync`: new and move write the truth and its links; the lists derived on the
+    /// other end come from `sync`.
     fn clean(t: &FakeTracker) -> Vec<crate::check::Finding> {
+        crate::derived::sync_all(t, &[], false).unwrap();
         crate::check::check(
             &t.all_items().unwrap(),
             &FrontMatter,

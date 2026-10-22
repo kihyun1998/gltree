@@ -1,5 +1,6 @@
 //! Every way a tracker breaks the tree convention.
 
+use crate::derived;
 use crate::header;
 use crate::item::{Item, State};
 use crate::scheme::RelationScheme;
@@ -104,8 +105,10 @@ pub fn check_with(
         .map(|it| (it.iid, header::refs_of(&it.desc)))
         .collect();
     let names = |a: u64, b: u64| refs.get(&a).is_some_and(|r| r.iter().any(|(_, n)| *n == b));
+    let naming = derived::naming_index(items);
     let mut out = Vec::new();
     for it in sorted {
+        let mut stale = Vec::new();
         let mut add = |kind: &'static str, detail: String| {
             out.push(Finding {
                 kind,
@@ -122,6 +125,10 @@ pub fn check_with(
                 if let Some(key) = split.header.as_ref().and_then(|h| h.naming(it.iid)) {
                     add("header", format!("`{key}` names the item itself"));
                 }
+                let h = split.header.clone().unwrap_or_default();
+                let e =
+                    derived::expected(it.iid, naming.get(&it.iid).into_iter().flatten().copied());
+                stale = derived::changes(it.iid, &h, &e);
                 split.body
             }
         };
@@ -174,6 +181,22 @@ pub fn check_with(
                     );
                 }
             }
+        }
+        for c in &stale {
+            let list = |ns: &[u64]| {
+                let ns: Vec<String> = ns.iter().map(|n| format!("#{n}")).collect();
+                format!("[{}]", ns.join(", "))
+            };
+            add(
+                "derived",
+                format!(
+                    "`{}` holds {}, the truth gives {}; gltree sync {} rewrites it",
+                    c.key,
+                    list(&c.before),
+                    list(&c.after),
+                    it.iid
+                ),
+            );
         }
         let blockers = |n: u64| {
             refs.get(&n)
@@ -265,15 +288,40 @@ mod tests {
         it
     }
 
+    /// `items` with every readable header's derived lists filled from the truth, so a test of
+    /// another rule is not also a test of `derived`. The derived rule's own tests skip this.
+    fn complete(items: &[Item]) -> Vec<Item> {
+        let naming = derived::naming_index(items);
+        let filled: Vec<String> = items
+            .iter()
+            .map(|it| match header::parse(&it.desc, &[]) {
+                Ok(s) => {
+                    let h = s.header.unwrap_or_default();
+                    let e = derived::expected(
+                        it.iid,
+                        naming.get(&it.iid).into_iter().flatten().copied(),
+                    );
+                    header::with_header(&it.desc, &derived::rebuilt(&h, &e)).unwrap()
+                }
+                Err(_) => it.desc.clone(),
+            })
+            .collect();
+        let mut out = items.to_vec();
+        for (it, desc) in out.iter_mut().zip(filled) {
+            it.desc = desc;
+        }
+        out
+    }
+
     fn kinds(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &FrontMatter, &RootsOnly, &[])
+        check(&complete(items), &FrontMatter, &RootsOnly, &[])
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
     }
 
     fn every(items: &[Item]) -> Vec<(&'static str, u64)> {
-        check(items, &FrontMatter, &EveryParent, &[])
+        check(&complete(items), &FrontMatter, &EveryParent, &[])
             .iter()
             .map(|f| (f.kind, f.iid))
             .collect()
@@ -398,6 +446,47 @@ mod tests {
     }
 
     #[test]
+    fn a_derived_list_that_disagrees_with_the_truth_is_reported_with_both_lists() {
+        let items = [
+            item(1, Open, "+++\nchildren = [2, 9]\n+++\n", &[2, 3]),
+            item(2, Open, &p(1), &[1]),
+            item(
+                3,
+                Open,
+                "+++\nparent = 1\nblocked_by = [4]\nrelated = [5]\n+++\n",
+                &[1, 4, 5],
+            ),
+            item(4, Open, "", &[3]),
+            item(5, Open, "+++\nrelated = [3]\n+++\n", &[3]),
+        ];
+        let found = check(&items, &FrontMatter, &RootsOnly, &[]);
+        let got: Vec<String> = found
+            .iter()
+            .filter(|f| f.kind == "derived")
+            .map(|f| format!("#{} {}", f.iid, f.detail))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "#1 `children` holds [#2, #9], the truth gives [#2, #3]; gltree sync 1 rewrites it",
+                "#4 `blocks` holds [], the truth gives [#3]; gltree sync 4 rewrites it",
+            ]
+        );
+        let mut one_end = items.to_vec();
+        one_end[4].desc = String::new();
+        let found = check(&complete(&one_end[..3]), &FrontMatter, &RootsOnly, &[]);
+        assert!(found.iter().all(|f| f.kind != "derived"), "{found:?}");
+        let found = check(&one_end, &FrontMatter, &RootsOnly, &[]);
+        assert!(
+            found.iter().any(|f| f.kind == "derived"
+                && f.iid == 5
+                && f.detail
+                    .contains("`related` holds [], the truth gives [#3]")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn a_tracker_whose_every_link_is_explained_is_clean() {
         assert!(kinds(&explained()).is_empty(), "{:?}", kinds(&explained()));
     }
@@ -424,7 +513,7 @@ mod tests {
         items[1].links = Some(vec![1, 4]);
         items[2].links = Some(vec![]);
         items[4].links = Some(vec![]);
-        let found = check(&items, &FrontMatter, &RootsOnly, &[]);
+        let found = check(&complete(&items), &FrontMatter, &RootsOnly, &[]);
         let got: Vec<String> = found
             .iter()
             .map(|f| format!("{} #{} {}", f.kind, f.iid, f.detail))
@@ -446,7 +535,7 @@ mod tests {
             "+++\nfrom = 98\nrelated = [99]\n+++\n",
             &[98, 99],
         )];
-        let found = check(&items, &FrontMatter, &RootsOnly, &[]);
+        let found = check(&complete(&items), &FrontMatter, &RootsOnly, &[]);
         let got: Vec<(&str, &str)> = found.iter().map(|f| (f.kind, f.detail.as_str())).collect();
         assert_eq!(
             got,

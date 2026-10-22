@@ -8,7 +8,7 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 
 - Items by number; per item, findings in this order: `header`, `old-header`, `task`,
   `missing-parent`, `missing-reference`, `unlinked` (the parent's, then the others' in key order),
-  `stray-link`, `blocker-cycle`, `cycle`, then the state policy's finding. Text:
+  `stray-link`, `derived`, `blocker-cycle`, `cycle`, then the state policy's finding. Text:
   `{kind:<26} #N  detail`, then `N anomalies`; exit 1 when any.
 - `header` is the header read strictly (`header::parse`): a block that never closes, TOML that does
   not parse, an unknown key, a value that is not an issue number, a list out of form (unsorted, a
@@ -31,6 +31,10 @@ How `gltree check` reads every item and reports where the tracker breaks the con
   at the lower number. With related items holding a key, every repo checks every link, so a child
   that lost its `parent` but kept its link is caught.
 - `blocker-cycle`: following `blocked_by` from an item comes back to it; each member is reported.
+- `derived`: a list gltree keeps (`children`, `blocks`, `related`) that the truth on the other end
+  does not give, one finding per list, with both lists and the `sync` that rewrites it
+  (`src/derived.rs`, shared with `sync` so the two never disagree). `related` is judged as the
+  union of both ends, so only a missing mirror is reported. A header `check` refuses is not judged.
 - `cycle` follows parents up from each item, so an item whose ancestors loop is reported along
   with the loop's members.
 - `check` hands every item, with whether it is a root and all its descendants, to the state
@@ -54,8 +58,6 @@ How `gltree check` reads every item and reports where the tracker breaks the con
 ## Known holes / open
 
 - `root_label` has no reader yet.
-- The derived lists (`children`, `blocks`, the `related` mirror) are not yet checked against the
-  truth.
 - `old-header` knows only the listed keys: a repo whose old format used another word reports it
   only once that word is in `old_head_keys`.
 - A full read takes about 45 s for a few thousand items: the pages are fetched one after another,
