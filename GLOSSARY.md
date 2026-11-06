@@ -49,6 +49,20 @@ A child, or a descendant of a child.
 A `relates_to` link between two items. It has no direction; every reference in a header has one, and every link is explained by a reference.
 _Avoid_: relation
 
+### Reading without the server
+
+**Snapshot**:
+A file holding a read-only copy of every item as of the moment it was taken: title, state, labels, body, links and comments. It can hold internal comments. Attachments stay links to the server.
+_Avoid_: backup, export
+
+**Comment**:
+What a person wrote on an item, with its author and time. A system note, such as a label change, is not a comment.
+_Avoid_: note
+
+**Internal comment**:
+A comment visible to project members only. A snapshot keeps it and marks it.
+_Avoid_: confidential note
+
 ### Rules a repo chooses
 
 **Relation scheme**:

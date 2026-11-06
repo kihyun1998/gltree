@@ -13,6 +13,7 @@ pub mod migrate;
 pub mod remote;
 pub mod roots;
 pub mod scheme;
+pub mod show;
 pub mod snapshot;
 pub mod tracker;
 pub mod tree;

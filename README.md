@@ -80,15 +80,13 @@ Each node shows its state, `closed/total` of its descendants when it has any, an
 `blocked by #B` while a blocker is open. `--json` prints `{"version": 2, "roots": [node]}`, where a
 node is `{number, title, state, closed, total, blocked_by_open, children}`.
 
-A snapshot is a JSON list of items (`iid`, `title`, `state`, `desc`, and optionally `labels` and
-`links`). Every root's tree (`gltree tree` with no number) reads every item.
+Every root's tree (`gltree tree` with no number) reads every item.
 
 ## Check
 
 ```sh
 gltree check                       # every way the tracker breaks the convention; exit 1 when any
 gltree check --json
-gltree snapshot tracker.json       # save every item, with its links, for --snapshot
 ```
 
 ```
@@ -103,6 +101,58 @@ keeps that the truth does not give; `gltree sync` rewrites it), `blocker-cycle`,
 `closed-parent-open-child`, `open-parent-all-closed`. Every number under `parent`, `from`,
 `related` and `blocked_by` needs its `relates_to` link, and every link needs a reference.
 `--json` prints `{"version": 1, "findings": [{kind, item, detail}]}`.
+
+## Snapshot and show
+
+```sh
+gltree snapshot tracker.json             # save every item for --snapshot
+gltree show 12 --snapshot tracker.json   # one item, from the file
+gltree show 12                           # one item, from the server
+gltree show 12 --json
+```
+
+```
+#12 [open] A settings drawer asks every value again
+labels: SPEC
+
+  The body of the item.
+
+2 comments
+
+mina  2026-01-02T03:04:05Z
+  The first comment.
+
+jo  2026-01-03T03:04:05Z  [internal]
+  A comment only project members can see.
+```
+
+What people wrote is indented under gltree's own lines, with control characters taken out, so a
+comment cannot pass for the head of another. `--json` gives the text as written.
+
+A snapshot is a read-only copy of the tracker as of the moment it was taken, so it can be read while
+the server is unreachable. It is a JSON list of items: `iid`, `title`, `state`, `desc`, and
+optionally `labels`, `links`, `closed_at`, `url` and `comments`. Each comment has `author`,
+`created_at`, `body` and `internal`, oldest first. System notes such as label changes are not saved.
+Attachments stay links to the server.
+
+**A snapshot can hold internal comments**, as far as the token that took it can read them. Treat the
+file like the tracker it was copied from. On Unix a new snapshot is readable by its owner alone, and
+a replaced one keeps its mode. On Windows the file takes the access of its folder, every time it is
+replaced, so access narrowed on the file itself is lost: keep it in a folder with the access you want.
+Save it outside the clone or list it in `.gitignore`, so it is not committed by accident.
+
+`snapshot` and `show` from the server need GitLab 17.11 or later. Below that they stop with the
+server's error and the previous snapshot stays; `show --snapshot` needs no server at all.
+
+`gltree snapshot` reads the whole tracker and its comments every time, which takes longer than
+`check` or `roots`. Those commands read no comments. The file is replaced only once the new one is
+complete: a failed read or write leaves the previous snapshot as it was. `migrate --out` writes the
+same way.
+
+`--json` prints `{"version": 1, number, title, state, labels, body, comments}`. `comments` is `null`
+when comments were not recorded (a snapshot taken before they were saved, or written by
+`migrate --out` from the server, which reads none), and `[]` for an item with none; the text output
+tells the two apart as well. `body` is the whole description, its header included. A number the source does not hold exits 2 and names it.
 
 ## Roots
 

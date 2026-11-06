@@ -8,6 +8,7 @@ use gltree::login;
 use gltree::migrate;
 use gltree::remote::Remote;
 use gltree::roots;
+use gltree::show;
 use gltree::snapshot::SnapshotFile;
 use gltree::tracker::Tracker;
 use gltree::tree;
@@ -171,7 +172,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Save every item of the tracker, with its links, to a file
+    /// One item with its labels, body and comments
+    Show {
+        /// The item, as `N` or `#N`
+        #[arg(value_parser = parse_iid)]
+        item: u64,
+        /// Read the item from a snapshot file instead of the server
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save every item of the tracker, with its links and comments, to a file
     Snapshot {
         /// The file to write
         out: PathBuf,
@@ -456,7 +469,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let plan = migrate::plan(&items, &words, &config.extra_keys)?;
             if let Some(path) = save {
                 let after = migrate::applied(&items, &plan);
-                std::fs::write(&path, SnapshotFile::to_bytes(&after))
+                SnapshotFile::save(&path, &after)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
             }
             if apply {
@@ -501,10 +514,28 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Command::Show {
+            item,
+            snapshot,
+            json,
+        } => {
+            let item = source(snapshot)?.item_with_comments(item)?;
+            if json {
+                writeln!(
+                    out,
+                    "{}",
+                    serde_json::to_string_pretty(&show::to_json(&item))?
+                )?;
+            } else {
+                for line in show::render(&item) {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Snapshot { out: path } => {
-            let items = server()?.all_items()?;
-            std::fs::write(&path, SnapshotFile::to_bytes(&items))
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let items = server()?.items_with_comments()?;
+            SnapshotFile::save(&path, &items).map_err(|e| format!("{}: {e}", path.display()))?;
             writeln!(out, "{} items -> {}", items.len(), path.display())?;
             Ok(ExitCode::SUCCESS)
         }

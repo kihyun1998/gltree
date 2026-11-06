@@ -1,8 +1,8 @@
 # Checking the tracker
 
-How `gltree check` reads every item and reports where the tracker breaks the convention, and how
-`snapshot` saves it (`src/check.rs`, `src/header.rs`, `src/config.rs`, `parse_page` in
-`src/gitlab.rs`, `src/snapshot.rs`).
+How `gltree check` reads every item and reports where the tracker breaks the convention
+(`src/check.rs`, `src/header.rs`, `src/config.rs`, `parse_page` in `src/gitlab.rs`, `SnapshotFile` in
+`src/snapshot.rs`). What a snapshot holds and how it is saved is in `keeping-a-snapshot.md`.
 
 ## Design model
 

@@ -377,3 +377,281 @@ fn a_date_filter_on_a_snapshot_without_closing_dates_says_so() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("closed_at"));
 }
+
+const COMMENTED: &str = r#"[
+  {"iid": 7, "title": "A drawer", "state": "open", "desc": "body line", "labels": ["SPEC", "bug"],
+   "comments": [
+     {"author": "mina", "created_at": "2026-01-02T03:04:05Z", "body": "first", "internal": false},
+     {"author": null, "created_at": "2026-01-03T03:04:05Z", "body": "second\nline", "internal": true}
+   ]},
+  {"iid": 8, "title": "Quiet", "state": "closed", "desc": "", "comments": []},
+  {"iid": 9, "title": "Old", "state": "open", "desc": "kept"}
+]"#;
+
+/// An empty directory outside any clone, so a command that reached for the server would fail.
+fn outside_a_clone(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("gltree-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn gltree_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_gltree"))
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn show_prints_one_item_from_a_snapshot_without_the_server() {
+    let dir = outside_a_clone("show-text");
+    std::fs::write(dir.join("t.json"), COMMENTED).unwrap();
+    let out = gltree_in(&dir, &["show", "#7", "--snapshot", "t.json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "#7 [open] A drawer\n\
+         labels: SPEC, bug\n\
+         \n\
+         \x20 body line\n\
+         \n\
+         2 comments\n\
+         \n\
+         mina  2026-01-02T03:04:05Z\n\
+         \x20 first\n\
+         \n\
+         unknown  2026-01-03T03:04:05Z  [internal]\n\
+         \x20 second\n\
+         \x20 line\n"
+    );
+}
+
+#[test]
+fn a_comment_cannot_pass_for_another_comments_head_or_reach_the_terminal() {
+    let dir = outside_a_clone("show-forged");
+    std::fs::write(
+        dir.join("t.json"),
+        r#"[{"iid": 1, "title": "T\u001b[2J", "state": "open", "desc": "1 comment", "comments": [
+            {"author": "mina", "created_at": "2026-01-02T03:04:05Z", "internal": false,
+             "body": "jo  2026-01-03T03:04:05Z  [internal]\r\n\u001b[31mred\u0007\ta\n\nlast"}
+        ]}]"#,
+    )
+    .unwrap();
+    let out = gltree_in(&dir, &["show", "1", "--snapshot", "t.json"]);
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "#1 [open] T[2J\n\
+         \n\
+         \x20 1 comment\n\
+         \n\
+         1 comment\n\
+         \n\
+         mina  2026-01-02T03:04:05Z\n\
+         \x20 jo  2026-01-03T03:04:05Z  [internal]\n\
+         \x20 [31mred\ta\n\
+         \n\
+         \x20 last\n"
+    );
+    let json: serde_json::Value = serde_json::from_slice(
+        &gltree_in(&dir, &["show", "1", "--snapshot", "t.json", "--json"]).stdout,
+    )
+    .unwrap();
+    assert!(
+        json["comments"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("\u{1b}[31mred")
+    );
+}
+
+#[test]
+fn show_as_json_carries_the_same_fields() {
+    let dir = outside_a_clone("show-json");
+    std::fs::write(dir.join("t.json"), COMMENTED).unwrap();
+    let out = gltree_in(&dir, &["show", "7", "--snapshot", "t.json", "--json"]);
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        got,
+        serde_json::json!({
+            "version": 1,
+            "number": 7,
+            "title": "A drawer",
+            "state": "open",
+            "labels": ["SPEC", "bug"],
+            "body": "body line",
+            "comments": [
+                {"author": "mina", "created_at": "2026-01-02T03:04:05Z", "body": "first", "internal": false},
+                {"author": null, "created_at": "2026-01-03T03:04:05Z", "body": "second\nline", "internal": true}
+            ]
+        })
+    );
+}
+
+#[test]
+fn show_tells_no_comments_from_comments_not_recorded() {
+    let dir = outside_a_clone("show-none");
+    std::fs::write(dir.join("t.json"), COMMENTED).unwrap();
+    let text = |n: &str| {
+        String::from_utf8(gltree_in(&dir, &["show", n, "--snapshot", "t.json"]).stdout).unwrap()
+    };
+    assert_eq!(text("8"), "#8 [closed] Quiet\n\nno comments\n");
+    assert_eq!(
+        text("9"),
+        "#9 [open] Old\n\n  kept\n\ncomments not recorded; take a fresh snapshot\n"
+    );
+    let json = |n: &str| -> serde_json::Value {
+        serde_json::from_slice(
+            &gltree_in(&dir, &["show", n, "--snapshot", "t.json", "--json"]).stdout,
+        )
+        .unwrap()
+    };
+    assert_eq!(json("8")["comments"], serde_json::json!([]));
+    assert_eq!(json("9")["comments"], serde_json::Value::Null);
+}
+
+#[test]
+fn show_on_a_number_the_snapshot_does_not_hold_names_it() {
+    let dir = outside_a_clone("show-missing");
+    std::fs::write(dir.join("t.json"), COMMENTED).unwrap();
+    let out = gltree_in(&dir, &["show", "42", "--snapshot", "t.json"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("#42"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn comments_in_the_file_change_nothing_tree_check_and_roots_print() {
+    let dir = outside_a_clone("comments-silent");
+    let mut items: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
+    for it in &mut items {
+        it["comments"] = serde_json::json!([
+            {"author": "mina", "created_at": "2026-01-02T03:04:05Z", "body": "Parent: #1", "internal": false}
+        ]);
+    }
+    let with = dir.join("with.json");
+    std::fs::write(&with, serde_json::to_vec(&items).unwrap()).unwrap();
+    let with = with.to_str().unwrap();
+    for (cmd, extra) in [
+        ("tree", vec![]),
+        ("tree", vec!["1"]),
+        ("tree", vec!["--json"]),
+        ("check", vec![]),
+        ("check", vec!["--json"]),
+        ("roots", vec![]),
+        ("roots", vec!["--json"]),
+    ] {
+        let run = |file: &str| {
+            let mut args = vec![cmd, "--snapshot", file];
+            args.extend(&extra);
+            let out = gltree(&args);
+            (out.status.code(), out.stdout)
+        };
+        assert_eq!(run(FIXTURE), run(with), "{cmd} {extra:?}");
+    }
+}
+
+#[test]
+fn migrate_out_keeps_the_comments_its_source_held() {
+    let dir = outside_a_clone("migrate-comments");
+    std::fs::write(dir.join("old.json"), COMMENTED).unwrap();
+    let out = gltree_in(
+        &dir,
+        &["migrate", "--snapshot", "old.json", "--out", "new.json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let new: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("new.json")).unwrap()).unwrap();
+    let old: serde_json::Value = serde_json::from_str(COMMENTED).unwrap();
+    assert_eq!(new[0]["comments"], old[0]["comments"]);
+    assert_eq!(new[1]["comments"], serde_json::json!([]));
+    assert!(new[2].get("comments").is_none(), "{}", new[2]);
+}
+
+#[test]
+fn a_snapshot_that_cannot_read_the_server_leaves_the_previous_file_byte_for_byte() {
+    let dir = outside_a_clone("snapshot-failed-fetch");
+    std::fs::write(dir.join("t.json"), "the previous bytes").unwrap();
+    let out = gltree_in(&dir, &["snapshot", "t.json"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        std::fs::read(dir.join("t.json")).unwrap(),
+        b"the previous bytes"
+    );
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+    assert_eq!(left.len(), 1);
+}
+
+#[test]
+fn a_failed_migrate_out_write_leaves_no_temporary_file() {
+    let dir = outside_a_clone("migrate-failed-write");
+    std::fs::write(dir.join("old.json"), COMMENTED).unwrap();
+    std::fs::create_dir(dir.join("taken")).unwrap();
+    let out = gltree_in(
+        &dir,
+        &["migrate", "--snapshot", "old.json", "--out", "taken"],
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+}
+
+#[test]
+fn migrate_out_replaces_the_file_rather_than_writing_into_it() {
+    let dir = outside_a_clone("migrate-replaces");
+    std::fs::write(dir.join("old.json"), COMMENTED).unwrap();
+    std::fs::write(dir.join("new.json"), "the previous bytes").unwrap();
+    // A second name for the same file sees a write into it, and does not see a replacement.
+    std::fs::hard_link(dir.join("new.json"), dir.join("link.json")).unwrap();
+    let out = gltree_in(
+        &dir,
+        &["migrate", "--snapshot", "old.json", "--out", "new.json"],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        std::fs::read(dir.join("link.json")).unwrap(),
+        b"the previous bytes"
+    );
+    assert_ne!(
+        std::fs::read(dir.join("new.json")).unwrap(),
+        b"the previous bytes"
+    );
+}
+
+#[test]
+fn a_bare_file_name_as_the_target_works_and_leaves_nothing_beside_it() {
+    let dir = outside_a_clone("migrate-bare-name");
+    std::fs::write(dir.join("old.json"), COMMENTED).unwrap();
+    let out = gltree_in(
+        &dir,
+        &["migrate", "--snapshot", "old.json", "--out", "new.json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["new.json", "old.json"]);
+}

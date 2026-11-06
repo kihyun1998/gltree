@@ -18,6 +18,19 @@ impl State {
     }
 }
 
+/// A comment a person wrote on an item; system notes are not comments.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Comment {
+    /// The author's username; `None` when the server names none.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// When it was written, as the server's timestamp.
+    pub created_at: String,
+    pub body: String,
+    /// Visible to project members only.
+    pub internal: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Item {
     pub iid: u64,
@@ -38,6 +51,9 @@ pub struct Item {
     pub closed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Oldest first; `None` when the source did not record comments at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<Vec<Comment>>,
 }
 
 fn issue() -> String {
@@ -56,6 +72,7 @@ impl Item {
             links: None,
             closed_at: None,
             url: None,
+            comments: None,
         }
     }
 

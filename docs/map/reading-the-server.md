@@ -14,6 +14,7 @@ level walk (`src/remote.rs`, `src/login.rs`, `src/gitlab.rs`, `subtree` in `src/
 - **The query** writes the item numbers into its text (`iids:["3","12"]`), at most 100 per request,
   with `linkedItems(first:100)` each. A page that says `hasNextPage` is an error: a short tree would
   look complete.
+- **Comments** have reads of their own, with a floor of GitLab 17.11: see `keeping-a-snapshot.md`.
 - **Project and host** come from `git remote get-url origin`: `https://[user@]host[:port]/path[.git]`,
   `ssh://user@host[:port]/path[.git]`, `user@host:path[.git]`.
 - **Login.** glab's config file, found in glab's own search order: `GLAB_CONFIG_DIR/config.yml`

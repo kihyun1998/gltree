@@ -1,6 +1,6 @@
 //! The tracker on a GitLab server, over its GraphQL API.
 
-use crate::item::{Item, State};
+use crate::item::{Comment, Item, State};
 use crate::login::Login;
 use crate::tracker::{Created, Error, Linked, Tracker};
 use serde_json::{Value, json};
@@ -74,6 +74,11 @@ impl GitLab {
         answer(status, &bytes)
     }
 
+    /// Every item with its comments, for a snapshot; a read `all_items` does not pay for.
+    pub fn items_with_comments(&self) -> Result<Vec<Item>, Error> {
+        read_items_with_comments(&self.project, &mut |q| self.graphql(q))
+    }
+
     /// A REST call under this project, e.g. `issues`; the status and the body.
     fn rest(
         &self,
@@ -139,6 +144,10 @@ impl Tracker for GitLab {
                 None => return Ok(items),
             }
         }
+    }
+
+    fn item_with_comments(&self, iid: u64) -> Result<Item, Error> {
+        read_item_with_comments(&self.project, iid, &mut |q| self.graphql(q))
     }
 
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {
@@ -333,15 +342,186 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
     Ok(out)
 }
 
+/// The fields of an item, with `widgets` extended by `extra`.
+fn item_fields(extra: &str) -> String {
+    format!(
+        "iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}{extra}}}"
+    )
+}
+
+const LINKS_FRAGMENT: &str = "          ... on WorkItemWidgetLinkedItems{linkedItems(first:100){pageInfo{hasNextPage} nodes{workItem{iid}}}}";
+
+/// `,after:"cursor"` for a connection's arguments, or nothing on its first page.
+fn after_arg(after: Option<&str>) -> String {
+    after
+        .map(|a| format!(",after:{}", Value::String(a.into())))
+        .unwrap_or_default()
+}
+
+/// One page of an item's comments, after `after` (a cursor from the previous page).
+fn notes_fragment(after: Option<&str>) -> String {
+    let after = after_arg(after);
+    format!(
+        " ... on WorkItemWidgetNotes{{notes(first:100,filter:ONLY_COMMENTS{after}){{pageInfo{{hasNextPage endCursor}} nodes{{system internal createdAt body author{{username}}}}}}}}"
+    )
+}
+
+fn page_query_with(project: &str, after: Option<&str>, extra: &str) -> String {
+    let after = after_arg(after);
+    format!(
+        "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{{fields}}}}}}}}}",
+        project = Value::String(project.into()),
+        fields = item_fields(&format!("{LINKS_FRAGMENT}{extra}")),
+    )
+}
+
 /// One page of every work item, after `after` (a cursor from the previous page).
 pub fn page_query(project: &str, after: Option<&str>) -> String {
-    let after = after
-        .map(|a| format!(",after:{}", Value::String(a.into())))
-        .unwrap_or_default();
+    page_query_with(project, after, "")
+}
+
+/// One page of every work item with the first page of each one's comments.
+pub fn page_query_with_comments(project: &str, after: Option<&str>) -> String {
+    page_query_with(project, after, &notes_fragment(None))
+}
+
+/// One item, without its links, with the first page of its comments.
+pub fn item_query_with_comments(project: &str, iid: u64) -> String {
     format!(
-        "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{iid}}}}}}}}}}}}}}}}}}",
-        project = Value::String(project.into())
+        "query{{project(fullPath:{project}){{workItems(iids:[\"{iid}\"],first:1){{nodes{{{fields}}}}}}}}}",
+        project = Value::String(project.into()),
+        fields = item_fields(&notes_fragment(None)),
     )
+}
+
+/// The page of an item's comments after `after`.
+pub fn comments_query(project: &str, iid: u64, after: &str) -> String {
+    format!(
+        "query{{project(fullPath:{project}){{workItems(iids:[\"{iid}\"],first:1){{nodes{{widgets{{{notes}}}}}}}}}}}",
+        project = Value::String(project.into()),
+        notes = notes_fragment(Some(after)),
+    )
+}
+
+/// One page of an item's comments, system notes left out, and the cursor of the next page.
+struct CommentPage {
+    comments: Vec<Comment>,
+    next: Option<String>,
+}
+
+/// The page of comments in a work item node; `None` when the node has no comments widget.
+fn parse_comments(node: &Value) -> Result<Option<CommentPage>, Error> {
+    let Some(notes) = node["widgets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|w| w.get("notes"))
+    else {
+        return Ok(None);
+    };
+    let bad =
+        |n: &Value| Error::Malformed(format!("a comment without createdAt/body/internal: {n}"));
+    let mut comments = Vec::new();
+    for n in notes["nodes"].as_array().into_iter().flatten() {
+        if n["system"].as_bool() == Some(true) {
+            continue;
+        }
+        comments.push(Comment {
+            author: n
+                .pointer("/author/username")
+                .and_then(Value::as_str)
+                .map(String::from),
+            created_at: n["createdAt"].as_str().ok_or_else(|| bad(n))?.into(),
+            body: n["body"].as_str().ok_or_else(|| bad(n))?.into(),
+            internal: n["internal"].as_bool().ok_or_else(|| bad(n))?,
+        });
+    }
+    let more = notes
+        .pointer("/pageInfo/hasNextPage")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let next = match notes.pointer("/pageInfo/endCursor").and_then(Value::as_str) {
+        Some(cursor) if more => Some(cursor.to_string()),
+        None if more => {
+            return Err(Error::Malformed(
+                "a page of comments says there is more but gives no cursor".into(),
+            ));
+        }
+        _ => None,
+    };
+    Ok(Some(CommentPage { comments, next }))
+}
+
+/// All of an item's comments, oldest first, from its node and the pages after it; `None` when
+/// the node has no comments widget.
+fn all_comments(
+    project: &str,
+    iid: u64,
+    node: &Value,
+    ask: &mut impl FnMut(&str) -> Result<Value, Error>,
+) -> Result<Option<Vec<Comment>>, Error> {
+    let Some(CommentPage {
+        mut comments,
+        mut next,
+    }) = parse_comments(node)?
+    else {
+        return Ok(None);
+    };
+    while let Some(cursor) = next {
+        let data = ask(&comments_query(project, iid, &cursor))?;
+        let node = data
+            .pointer("/project/workItems/nodes/0")
+            .ok_or(Error::NotFound(iid))?;
+        let page = parse_comments(node)?.ok_or_else(|| {
+            Error::Malformed(format!("a further page of #{iid}'s comments without them"))
+        })?;
+        comments.extend(page.comments);
+        next = page.next;
+    }
+    comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(Some(comments))
+}
+
+fn nodes_of(data: &Value) -> &[Value] {
+    data.pointer("/project/workItems/nodes")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
+/// Every item with every comment, through `ask`, which answers a GraphQL query with its `data`.
+pub fn read_items_with_comments(
+    project: &str,
+    ask: &mut impl FnMut(&str) -> Result<Value, Error>,
+) -> Result<Vec<Item>, Error> {
+    let (mut items, mut after) = (Vec::new(), None);
+    loop {
+        let data = ask(&page_query_with_comments(project, after.as_deref()))?;
+        let (page, next) = parse_page(&data)?;
+        for (mut item, node) in page.into_iter().zip(nodes_of(&data)) {
+            item.comments = all_comments(project, item.iid, node, ask)?;
+            items.push(item);
+        }
+        match next {
+            Some(cursor) => after = Some(cursor),
+            None => return Ok(items),
+        }
+    }
+}
+
+/// One item with every comment, through `ask`.
+pub fn read_item_with_comments(
+    project: &str,
+    iid: u64,
+    ask: &mut impl FnMut(&str) -> Result<Value, Error>,
+) -> Result<Item, Error> {
+    let data = ask(&item_query_with_comments(project, iid))?;
+    let (page, _) = parse_page(&data)?;
+    let mut item = page.into_iter().next().ok_or(Error::NotFound(iid))?;
+    let node = nodes_of(&data).first().ok_or(Error::NotFound(iid))?;
+    item.links = None;
+    item.comments = all_comments(project, iid, node, ask)?;
+    Ok(item)
 }
 
 /// The items of a page with their type, labels and link ends, and the cursor of the next page.
@@ -505,6 +685,325 @@ mod tests {
         let q = page_query("team/app", Some("ab\"c"));
         assert!(q.contains(r#"after:"ab\"c""#), "{q}");
         assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+    }
+
+    fn note(body: &str, at: &str, system: bool, internal: bool) -> Value {
+        json!({ "system": system, "internal": internal, "createdAt": at, "body": body,
+                "author": { "username": "mina" } })
+    }
+
+    fn notes_widget(nodes: Vec<Value>, next: Option<&str>) -> Value {
+        json!({ "notes": { "pageInfo": { "hasNextPage": next.is_some(), "endCursor": next }, "nodes": nodes } })
+    }
+
+    fn full_node(iid: u64, widgets: Vec<Value>) -> Value {
+        json!({ "iid": iid.to_string(), "title": format!("t{iid}"), "state": "OPEN",
+                "workItemType": { "name": "Issue" }, "widgets": widgets })
+    }
+
+    fn page(nodes: Vec<Value>, next: Option<&str>) -> Value {
+        json!({ "project": { "workItems": {
+            "pageInfo": { "hasNextPage": next.is_some(), "endCursor": next }, "nodes": nodes } } })
+    }
+
+    /// Answers each query from `answers` in order, keeping the queries in `asked`.
+    fn scripted<'a>(
+        answers: Vec<Value>,
+        asked: &'a std::cell::RefCell<Vec<String>>,
+    ) -> impl FnMut(&str) -> Result<Value, Error> + 'a {
+        let mut answers = answers.into_iter();
+        move |q: &str| {
+            asked.borrow_mut().push(q.to_string());
+            Ok(answers.next().expect("no more queries were expected"))
+        }
+    }
+
+    fn bodies(item: &Item) -> Vec<&str> {
+        item.comments
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.body.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_snapshot_read_follows_an_items_comments_past_one_page() {
+        let at = |d: u32| format!("2026-01-0{d}T00:00:00Z");
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![
+                page(
+                    vec![
+                        full_node(
+                            1,
+                            vec![notes_widget(
+                                vec![note("a", &at(1), false, false)],
+                                Some("c1"),
+                            )],
+                        ),
+                        full_node(2, vec![notes_widget(vec![], None)]),
+                    ],
+                    Some("p2"),
+                ),
+                page(
+                    vec![full_node(
+                        1,
+                        vec![notes_widget(
+                            vec![note("b", &at(2), false, false)],
+                            Some("c2"),
+                        )],
+                    )],
+                    None,
+                ),
+                page(
+                    vec![full_node(
+                        1,
+                        vec![notes_widget(vec![note("c", &at(3), false, false)], None)],
+                    )],
+                    None,
+                ),
+                page(
+                    vec![full_node(
+                        3,
+                        vec![notes_widget(vec![note("d", &at(4), false, false)], None)],
+                    )],
+                    None,
+                ),
+            ],
+            &asked,
+        );
+        let items = read_items_with_comments("team/app", &mut ask).unwrap();
+        assert_eq!(items.iter().map(|i| i.iid).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(bodies(&items[0]), ["a", "b", "c"]);
+        assert_eq!(items[1].comments, Some(vec![]));
+        assert_eq!(bodies(&items[2]), ["d"]);
+        let asked = asked.borrow();
+        assert_eq!(asked.len(), 4, "{asked:?}");
+        assert!(
+            asked[1].contains(r#"iids:["1"]"#) && asked[1].contains(r#"after:"c1""#),
+            "{}",
+            asked[1]
+        );
+        assert!(asked[2].contains(r#"after:"c2""#), "{}", asked[2]);
+        assert!(
+            asked[3].contains(r#"workItems(first:100,after:"p2")"#),
+            "{}",
+            asked[3]
+        );
+    }
+
+    #[test]
+    fn comments_leave_out_system_notes_and_read_oldest_first() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(
+                    1,
+                    vec![notes_widget(
+                        vec![
+                            note("newer", "2026-01-03T00:00:00Z", false, true),
+                            note("changed the label", "2026-01-02T00:00:00Z", true, false),
+                            note("older", "2026-01-01T00:00:00Z", false, false),
+                        ],
+                        None,
+                    )],
+                )],
+                None,
+            )],
+            &asked,
+        );
+        let item = read_item_with_comments("team/app", 1, &mut ask).unwrap();
+        assert_eq!(bodies(&item), ["older", "newer"]);
+        let comments = item.comments.unwrap();
+        assert_eq!((comments[0].internal, comments[1].internal), (false, true));
+        assert_eq!(comments[0].author.as_deref(), Some("mina"));
+    }
+
+    #[test]
+    fn a_comment_whose_author_is_absent_still_reads() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(
+                    1,
+                    vec![notes_widget(
+                        vec![json!({ "system": false, "internal": false,
+                            "createdAt": "2026-01-01T00:00:00Z", "body": "x", "author": null })],
+                        None,
+                    )],
+                )],
+                None,
+            )],
+            &asked,
+        );
+        let item = read_item_with_comments("team/app", 1, &mut ask).unwrap();
+        assert_eq!(item.comments.unwrap()[0].author, None);
+    }
+
+    #[test]
+    fn one_item_read_from_the_server_carries_its_labels_and_follows_its_comments() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![
+                page(
+                    vec![full_node(
+                        5,
+                        vec![
+                            json!({ "labels": { "nodes": [{ "title": "SPEC" }] } }),
+                            notes_widget(
+                                vec![note("a", "2026-01-01T00:00:00Z", false, false)],
+                                Some("c1"),
+                            ),
+                        ],
+                    )],
+                    None,
+                ),
+                page(
+                    vec![full_node(
+                        5,
+                        vec![notes_widget(
+                            vec![note("b", "2026-01-02T00:00:00Z", false, false)],
+                            None,
+                        )],
+                    )],
+                    None,
+                ),
+            ],
+            &asked,
+        );
+        let item = read_item_with_comments("team/app", 5, &mut ask).unwrap();
+        assert_eq!(item.labels, ["SPEC"]);
+        assert_eq!(bodies(&item), ["a", "b"]);
+        assert!(asked.borrow()[0].contains(r#"iids:["5"]"#));
+    }
+
+    #[test]
+    fn one_item_the_server_does_not_hold_is_not_found() {
+        let asked = Default::default();
+        let mut ask = scripted(vec![page(vec![], None)], &asked);
+        assert!(matches!(
+            read_item_with_comments("team/app", 42, &mut ask),
+            Err(Error::NotFound(42))
+        ));
+    }
+
+    #[test]
+    fn a_failed_comment_page_fails_the_whole_read() {
+        let mut calls = 0;
+        let mut ask = |_: &str| {
+            calls += 1;
+            if calls == 1 {
+                Ok(page(
+                    vec![full_node(1, vec![notes_widget(vec![], Some("c1"))])],
+                    None,
+                ))
+            } else {
+                Err(Error::Server("HTTP 500".into()))
+            }
+        };
+        assert!(matches!(
+            read_items_with_comments("team/app", &mut ask),
+            Err(Error::Server(_))
+        ));
+    }
+
+    #[test]
+    fn a_next_page_without_a_cursor_is_an_error_not_a_short_list() {
+        let asked = Default::default();
+        let widget = json!({ "notes": { "pageInfo": { "hasNextPage": true, "endCursor": null }, "nodes": [] } });
+        let mut ask = scripted(vec![page(vec![full_node(1, vec![widget])], None)], &asked);
+        assert!(matches!(
+            read_items_with_comments("team/app", &mut ask),
+            Err(Error::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn a_further_page_without_the_comments_is_an_error_not_a_short_list() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![
+                page(
+                    vec![full_node(1, vec![notes_widget(vec![], Some("c1"))])],
+                    None,
+                ),
+                page(vec![full_node(1, vec![])], None),
+            ],
+            &asked,
+        );
+        assert!(matches!(
+            read_items_with_comments("team/app", &mut ask),
+            Err(Error::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn an_item_without_the_comments_widget_has_comments_not_recorded() {
+        let asked = Default::default();
+        let mut ask = scripted(vec![page(vec![full_node(1, vec![])], None)], &asked);
+        let items = read_items_with_comments("team/app", &mut ask).unwrap();
+        assert_eq!(items[0].comments, None);
+    }
+
+    #[test]
+    fn a_comment_that_does_not_say_whether_it_is_internal_is_an_error() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(
+                    1,
+                    vec![notes_widget(
+                        vec![
+                            json!({ "system": false, "createdAt": "2026-01-01T00:00:00Z", "body": "x" }),
+                        ],
+                        None,
+                    )],
+                )],
+                None,
+            )],
+            &asked,
+        );
+        assert!(matches!(
+            read_item_with_comments("team/app", 1, &mut ask),
+            Err(Error::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn one_item_read_from_the_server_does_not_ask_for_its_links() {
+        assert!(!item_query_with_comments("team/app", 5).contains("linkedItems"));
+        assert!(page_query_with_comments("team/app", None).contains("linkedItems"));
+        assert!(page_query("team/app", None).contains("linkedItems"));
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(5, vec![notes_widget(vec![], None)])],
+                None,
+            )],
+            &asked,
+        );
+        let item = read_item_with_comments("team/app", 5, &mut ask).unwrap();
+        assert_eq!(item.links, None);
+    }
+
+    #[test]
+    fn only_the_comment_reads_ask_for_comments() {
+        for q in [
+            page_query("team/app", None),
+            page_query("team/app", Some("c")),
+            level_query("team/app", &[3]),
+        ] {
+            assert!(!q.contains("Notes") && !q.contains("notes("), "{q}");
+        }
+        for q in [
+            page_query_with_comments("team/app", None),
+            item_query_with_comments("team/app", 5),
+            comments_query("team/app", 5, "ab\"c"),
+        ] {
+            assert!(q.contains("notes(first:100,filter:ONLY_COMMENTS"), "{q}");
+            assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+        }
     }
 
     #[test]

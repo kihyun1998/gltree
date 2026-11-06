@@ -51,6 +51,8 @@ pub struct Created {
 
 pub trait Tracker {
     fn all_items(&self) -> Result<Vec<Item>, Error>;
+    /// One item with its labels and comments; `Error::NotFound` when there is none.
+    fn item_with_comments(&self, iid: u64) -> Result<Item, Error>;
     /// The given items with their linked items, in one request; an absent item is left out.
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error>;
     fn create_item(&self, title: &str, desc: &str, labels: &[String]) -> Result<Created, Error>;
@@ -94,6 +96,10 @@ impl FakeTracker {
 impl Tracker for FakeTracker {
     fn all_items(&self) -> Result<Vec<Item>, Error> {
         Ok(self.items.borrow().clone())
+    }
+
+    fn item_with_comments(&self, iid: u64) -> Result<Item, Error> {
+        self.item(iid).ok_or(Error::NotFound(iid))
     }
 
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {

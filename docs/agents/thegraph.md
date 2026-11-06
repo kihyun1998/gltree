@@ -15,7 +15,7 @@ names, paths and server stay out of this public repository, in the untracked
 |---|---|---|---|
 | each consumer's Python tree tool and its tests | how it works: `tree`/`check` output, line for line | the clone paths in `consumers.local.md` — raw | binding |
 | each consumer's `docs/agents/issue-tracker.md` § Structure | how it works: the convention, until gltree holds it | the same clones — raw | binding |
-| GitLab CE 17.3 GraphQL and REST | how it works | the GitLab docs site — **summarized**; confirm against a consumer's server | binding |
+| GitLab CE 17.11 GraphQL and REST | how it works | the GitLab docs site — **summarized**; confirm against a consumer's server | binding |
 | glab: config format, `ca_cert` handling | how it works | its source tree, gitlab.com/gitlab-org/cli — raw | binding |
 | `gh` · `glab` | how it works: command and flag layout | their source trees — raw | example |
 | the maintainer's `just-shield` release workflow and `homebrew-tap` / `scoop-bucket` auto-update | where files go: the release and distribution pipeline | github.com/kihyun1998 — raw | example |
