@@ -37,9 +37,10 @@ How `gltree snapshot` saves the tracker so it can be read while the server is un
   renames it over the target. `snapshot` and `migrate --out` both go through it (the maintainer's
   call on #24 for `migrate --out`). A read-only target is refused, as `std::fs::write` refused it. On
   Windows the rename refuses it even without the check (measured by removing it); on Unix a rename
-  depends on the directory's permissions and not the file's, so there the check is what refuses, and
-  that has not been run. On Unix a new file is `0600` and a replaced one keeps its mode; those tests
-  run on Unix only, in the release workflow's gate.
+  depends on the directory's permissions and not the file's, so there the check should be what refuses.
+  The test passes on Ubuntu, but removing the check has not been tried there. On Unix a new file is
+  `0600` and a replaced one keeps its mode; those tests run on Unix only, in the release workflow's
+  gate.
 - **Windows access is the folder's.** A replaced file takes its folder's inherited access: `Permissions`
   carries only the read-only flag, so an ACL narrowed on the file is lost (measured: one user before,
   five entries after). The maintainer's call on #24: documented in the README, not kept. Keeping it
