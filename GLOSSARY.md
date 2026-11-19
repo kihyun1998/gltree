@@ -45,6 +45,9 @@ A header key gltree writes from the truth on the other end — `children` from `
 **Descendant**:
 A child, or a descendant of a child.
 
+**Family**:
+A root and every item `tree` draws under it. `gltree tree` with no number leaves out a family whose every item is closed. Not the `Family` a state policy receives in `check`, which is one item's place: whether it is a root, its children and its descendants.
+
 **Link**:
 A `relates_to` link between two items. It has no direction; every reference in a header has one, and every link is explained by a reference.
 _Avoid_: relation

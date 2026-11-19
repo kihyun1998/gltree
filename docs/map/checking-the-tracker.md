@@ -49,7 +49,7 @@ snapshot), one finding per break, in a fixed order; exit 1 when there is any.
 ## Code
 - `src/check.rs — Finding, check, check_with, render, to_json, JSON_VERSION`
 - `src/main.rs — Command::Check`
-- `tests/cli.rs — check_matches_the_python_tool_byte_for_byte_and_exits_1, check_json_lists_each_finding`; `tests/golden/check.txt`; `tests/fixtures/tracker.json`
+- `tests/cli.rs — check_matches_its_golden_and_exits_1, check_json_lists_each_finding`; `tests/golden/check.txt`; `tests/fixtures/tracker.json`
 
 ## Reference behaviour
 - The consumers' Python tree tool: the kinds, order and text of the first-line era's findings were

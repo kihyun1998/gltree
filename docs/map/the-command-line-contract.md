@@ -17,7 +17,7 @@ implementation, which is why its output is what callers read; it does not decide
 - **`tree` without a number leaves out families whose every item is closed**; `--all` draws every
   family and is a usage error (exit 2) beside a number. The JSON shape is unchanged, with fewer
   `roots` by default; `tree N --json`, which outside skills read, is unchanged (#25).
-- **JSON shapes carry a version**, raised on any change a reader could notice: `tree` 2, `check` 1,
+- **JSON shapes carry a version**, raised when the shape changes — a field added, removed or renamed; fewer items is not a shape change (#25): `tree` 2, `check` 1,
   `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1 (each module's `JSON_VERSION`,
   `NEW_JSON_VERSION`). The shapes are in the README and in each owning note.
 - **Item numbers** are accepted as `N` or `#N` (`parse_iid`).

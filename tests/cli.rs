@@ -31,7 +31,7 @@ fn tree_text(args: &[&str]) -> String {
 }
 
 #[test]
-fn tree_under_a_root_matches_the_python_tool_byte_for_byte() {
+fn tree_under_a_root_matches_its_golden() {
     for (root, file) in [
         ("1", "tree-1.txt"),
         ("#3", "tree-3.txt"),
@@ -187,7 +187,7 @@ fn a_live_tree_outside_a_clone_says_where_to_run_it() {
 }
 
 #[test]
-fn check_matches_the_python_tool_byte_for_byte_and_exits_1() {
+fn check_matches_its_golden_and_exits_1() {
     let out = gltree(&["check", "--snapshot", FIXTURE]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8(out.stdout).unwrap(), golden("check.txt"));
