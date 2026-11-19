@@ -1,70 +1,71 @@
 # Checking the tracker
 
-How `gltree check` reads every item and reports where the tracker breaks the convention
-(`src/check.rs`, `src/header.rs`, `src/config.rs`, `parse_page` in `src/gitlab.rs`, `SnapshotFile` in
-`src/snapshot.rs`). What a snapshot holds and how it is saved is in `keeping-a-snapshot.md`.
+## What it is
+`gltree check`: every way a tracker breaks the convention, read from the whole tracker (server or
+snapshot), one finding per break, in a fixed order; exit 1 when there is any.
+
+## Governing decisions
+- [ADR-0004](../adr/0004-references-live-in-a-toml-header.md) — what is in form, and every link
+  explained by a reference.
+- [ADR-0001](../adr/0001-the-child-records-its-parent-and-links-are-the-way-down.md) — a `parent`
+  without its link is invisible to a tree walk, so it is reported.
+- [ADR-0002](../adr/0002-gltree-owns-the-tree-convention.md) — gltree is the convention's one
+  implementation; state rules are the repo's.
 
 ## Design model
+- **Order.** Items by number; per item: `header`, `old-header`, `task`, `missing-parent`,
+  `missing-reference`, `unlinked` (the parent's, then the others' in `refs_of` order: `from`, `related`,
+  `blocked_by`), `stray-link`, `derived`, `blocker-cycle`, `cycle`, then the state policy's finding.
+  Text `{kind:<26} #N  detail`, then `N anomalies`. Source: `check_with`, `render`.
+- **`header`** is `header::parse`'s refusal, word for word, plus a reference key naming the item
+  itself (`Header::naming`). The detail is the reason, so one finding names one fix. A header `check`
+  refuses is not judged for `derived`.
+- **References are read loosely** (`refs_of`, and `parent_of` through the scheme): a value in form
+  counts even beside a key `check` refuses, so one stray key does not also detach a subtree or turn
+  every link stray. A first line `Parent: #N` is no parent (test `an_old_first_line_makes_no_parent`).
+- **`old-header`** reports a body still opening with a first-line head
+  ([holding-references-in-the-header](holding-references-in-the-header.md), `old_head`). It is a
+  detector, wider than the mover: `migrate` leaves `Parent: #4 (a reason)` in the body (its
+  `read_line` takes a Parent line only with nothing after the number), and `check` reports that same
+  line, so a person moves it by hand. The two readers take their words from different places — the
+  repo config's `old_head_keys` here, `migrate`'s one-off flags there — and are not one rule
+  (reading of `old_head` and `migrate::read_line`, 2026-11-19).
+- **Links**: `unlinked` for every reference without its `relates_to` link; `stray-link` for a link no
+  reference on either end explains, once per pair at the lower number. Both need the item's links to
+  have been recorded: `links: None` reports nothing
+  ([not recorded is not none](not-recorded-is-not-none.md)).
+- **`derived`** is [keeping-the-derived-lists](keeping-the-derived-lists.md)' `changes`, one finding
+  per list, naming the `gltree sync N` that fixes it. `related` is judged as the union of both ends,
+  so only a missing mirror is reported.
+- **Cycles**: `blocker-cycle` when following `blocked_by` comes back to the item; `cycle` when
+  following parents up does, so an item under a loop is reported with the loop's members.
+- **The full read** is paged GraphQL, 100 items a page, with type, labels and link ends; an item
+  whose links overflow one page fails the read, since `unlinked` needs every link
+  ([reading-the-server](reading-the-server.md), `parse_page`).
+- **Tests**: `tests/golden/check.txt` against `tests/fixtures/tracker.json` (`tests/cli.rs`). The
+  golden was first printed by the consumers' Python tool, since deleted; a deliberate output change
+  is now reviewed and the golden rewritten from gltree's own output (maintainer, 2026-11-19).
 
-- Items by number; per item, findings in this order: `header`, `old-header`, `task`,
-  `missing-parent`, `missing-reference`, `unlinked` (the parent's, then the others' in key order),
-  `stray-link`, `derived`, `blocker-cycle`, `cycle`, then the state policy's finding. Text:
-  `{kind:<26} #N  detail`, then `N anomalies`; exit 1 when any.
-- `header` is the header read strictly (`header::parse`): a block that never closes, TOML that does
-  not parse, an unknown key, a value that is not an issue number, a list out of form (unsorted, a
-  number twice, empty), a `[notes]` key that is not a reference key or names a key the header does
-  not hold, an `[extra]` key the repo config does not declare, `from` equal to `parent`, and a
-  reference key that names the item itself. The detail is the reason, so one finding names one fix.
-- References are read loosely (`header::parent_of`, `header::refs_of`): a value in form counts
-  even beside a key `check` refuses, so one stray key does not also detach a subtree or turn every
-  link stray. A first line `Parent: #N` is no parent.
-- `old-header`: the body's first non-blank line is still a first-line head (`header::old_head`) — a
-  key of the old format (`Parent`, `From`, `Related`, `Blocked by`, `Depends on`, plus the repo's
-  `old_head_keys`), `: #`, a number, then nothing but a list, a reason in brackets or punctuation.
-  `Parent: #1 is quoted here` is prose and passes; so does a head below a heading. The keys are a
-  list, not a shape, because a body can open with a line like `Fixed with: #2 (…) + #3 (…)` —
-  the same shape as `Blocked by: #2550 (…), #2551.`, but prose that no migration would move.
-- `missing-reference` and `unlinked` cover `from`, `related` and `blocked_by` as `missing-parent`
-  and `unlinked` cover `parent`. `unlinked` needs to know links were recorded: an item's `links` is
-  `None` in a snapshot that never recorded them, and then nothing is reported.
-- `stray-link`: a link that no reference on either end explains (ADR-0004), reported once per pair
-  at the lower number. With related items holding a key, every repo checks every link, so a child
-  that lost its `parent` but kept its link is caught.
-- `blocker-cycle`: following `blocked_by` from an item comes back to it; each member is reported.
-- `derived`: a list gltree keeps (`children`, `blocks`, `related`) that the truth on the other end
-  does not give, one finding per list, with both lists and the `sync` that rewrites it
-  (`src/derived.rs`, shared with `sync` so the two never disagree). `related` is judged as the
-  union of both ends, so only a missing mirror is reported. A header `check` refuses is not judged.
-- `cycle` follows parents up from each item, so an item whose ancestors loop is reported along
-  with the loop's members.
-- `check` hands every item, with whether it is a root and all its descendants, to the state
-  policy, which alone decides; a future policy that judges non-roots needs nothing from `check`.
-- State policy `roots-only`: only an item with no parent at all is judged — a root closed with an
-  open descendant, or open with every descendant closed. An item under a missing parent is not a
-  root. Descendants are walked to any depth.
-- State policy `every-parent`: every item with children is judged on its **direct** children —
-  closed with an open child, or open with every child closed. A closed grandparent over a closed
-  child and an open grandchild is not reported; the child is. This suits a consumer whose `parent`
-  means "part of".
-- The full read is paged GraphQL (100 items a page) with type, labels and link ends; a node whose
-  links overflow one page is an error, since `unlinked` needs every link.
-- The repo config `.gltree.toml` sits at `git rev-parse --show-toplevel`: `root_label` (default
-  `SPEC`), `relation_scheme` (`front-matter`), `state_policy` (`roots-only`, or `every-parent`),
-  `extra_keys` (bare TOML keys) and `old_head_keys`. Unknown keys and unknown values fail, listing the known values,
-  so a config still naming the first-line settings (`origin_word`, `links`, `parent-line`) stops
-  every command. Absent file: defaults, and `present = false`, which the write commands read as
-  "this repo has not opted in".
+## Code
+- `src/check.rs — Finding, check, check_with, render, to_json, JSON_VERSION`
+- `src/main.rs — Command::Check`
+- `tests/cli.rs — check_matches_the_python_tool_byte_for_byte_and_exits_1, check_json_lists_each_finding`; `tests/golden/check.txt`; `tests/fixtures/tracker.json`
+
+## Reference behaviour
+- The consumers' Python tree tool: the kinds, order and text of the first-line era's findings were
+  matched to it, live, before it was deleted ([ADR-0002](../adr/0002-gltree-owns-the-tree-convention.md);
+  commit 6be32e0, 2026-10-22). It is no longer a reference: nothing is left to compare against.
+
+## Cross-cutting invariants
+- [Every reference has a link](every-reference-has-a-link.md) — `unlinked` and `stray-link` are its check.
+- [Not recorded is not none](not-recorded-is-not-none.md) — `links: None` silences the link findings.
+
+## Blast radius
+- [the-command-line-contract](the-command-line-contract.md) — kind names, the text line and exit 1 are read by callers; `--json` is versioned.
+- [migrating-a-tracker](migrating-a-tracker.md) — a migration is judged by `check --snapshot` on its `--out` file; `old-header` is what it leaves for a person.
+- [judging-an-items-state](judging-an-items-state.md) — the policy gets `check`'s `Family`; a change to how roots, children or descendants are built changes every state finding.
 
 ## Known holes / open
-
-- `root_label` has no reader yet.
-- `old-header` knows only the listed keys: a repo whose old format used another word reports it
-  only once that word is in `old_head_keys`.
-- A full read takes about 45 s for a few thousand items: the pages are fetched one after another,
-  each waiting for the previous page's cursor.
-
-## Traps
-
-- A tracker being written to while it is read gives a torn picture: a child created a moment
-  before its link reads as `unlinked` on one pass and clean on the next. Measured when two tools
-  read one tracker a minute apart while another session created children.
+- A full read takes about 45 s for a few thousand items: pages are fetched one after another, each waiting for the previous cursor (commit 6be32e0, 2026-10-22).
+- A tracker written to while it is read gives a torn picture: a child created a moment before its link reads as `unlinked` on one pass and clean on the next (commit 6be32e0, 2026-10-22).
+- `old-header` knows only listed keys: an old word reports only once it is in `old_head_keys`; a head below a heading is not judged.
