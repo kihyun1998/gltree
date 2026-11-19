@@ -78,14 +78,16 @@ gltree tree 12 --snapshot tracker.json --json   # the same tree as JSON
 ```
 
 Each node shows its state, `closed/total` of its descendants when it has any, and
-`blocked by #B` while a blocker is open. `--json` prints `{"version": 2, "roots": [node]}`, where a
-node is `{number, title, state, closed, total, blocked_by_open, children}`.
+`blocked by #B` while a blocker is open. `--json` prints `{"version": 3, "roots": [node]}`, where a
+node is `{number, title, state, url, labels, extra, closed, total, blocked_by_open, children}`. `url` is
+`null` when the source did not record it (an older snapshot), and `extra` holds the header's `[extra]`
+values, as `roots --json` gives them.
 
 Every root's tree (`gltree tree` with no number) reads every item and leaves out a family whose
 every item is closed: the root and everything drawn under it, a lone closed root included. A family
 with any open item is drawn whole, closed items included, and `closed/total` still counts every
 descendant. `--all` draws every family; it takes no number, since `gltree tree N` always draws
-N's tree. `--json` leaves out the same roots; the shape stays version 2.
+N's tree. `--json` leaves out the same roots; the shape is the same.
 
 ## Check
 

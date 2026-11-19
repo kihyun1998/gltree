@@ -39,7 +39,7 @@ it writes it back without touching the body after it.
 - Input bound: a description is whatever the server returns; nothing here bounds its size.
 
 ## Code
-- `src/header.rs — FENCE, REFS, NOTED, Header, Header::drop_orphan_notes, Header::has, Header::naming, Split, fenced, parse, refs_of, OLD_HEAD_KEYS, old_head, loose, parent_of, render, with_header`
+- `src/header.rs — FENCE, REFS, NOTED, Header, Header::drop_orphan_notes, Header::has, Header::naming, Split, fenced, parse, refs_of, OLD_HEAD_KEYS, old_head, loose, extra_json, parent_of, render, with_header`
 - `src/scheme.rs — FrontMatter::parent_of, ParentLine::parse` (`ParentLine` has no caller outside its test; ADR-0004 says only `migrate` reads the old format, and `migrate` has its own reader)
 
 ## Reference behaviour

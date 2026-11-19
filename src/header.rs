@@ -221,6 +221,19 @@ pub fn loose(desc: &str) -> Split<'_> {
     }
 }
 
+/// `h`'s `[extra]` values as JSON.
+pub fn extra_json(h: &Header) -> serde_json::Map<String, serde_json::Value> {
+    h.extra
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            )
+        })
+        .collect()
+}
+
 /// The parent `desc` names, or `None` when it names none or its header cannot be read at all.
 pub fn parent_of(desc: &str) -> Option<u64> {
     let (text, _) = fenced(desc).ok()??;

@@ -36,14 +36,23 @@ the server one depth at a time.
 - **A cycle ends where the path meets itself**: each node carries the items from the root down to it,
   not every item seen, so counts follow each path (`node`). This matched the Python tool's per-path
   counting (commit 2a78fa5, 2026-10-21).
-- **JSON** version 2: `{version, roots: [node]}`, `node = {number, title, state, closed, total,
-  blocked_by_open, children}`. Titles are printed raw.
+- **JSON** version 3: `{version, roots: [node]}`, `node = {number, title, state, url, labels, extra,
+  closed, total, blocked_by_open, children}`. Titles are printed raw. Every node carries `url`,
+  `labels` and `extra` in every mode, so a caller can link a node or show its labels and a
+  consumer's marker without reading the tracker again (#26). `url` is `null` when the source did not
+  record it; `labels` is a list, so a snapshot saved before labels were kept reads as `[]`, not as
+  unknown. `extra` is read with `header::loose`, as `roots --json` reads it (`header::extra_json`): every
+  `[extra]` key is taken whether or not the repo config declares it, and a header out of form gives
+  `{}`. The walk gets `url` and `labels` from `level`, which asks them for each item and each linked
+  item ([reading-the-server](reading-the-server.md)).
 - **Goldens**: `tests/golden/tree-*.txt` for `tests/fixtures/tracker.json`, stored LF and pinned by
   `.gitattributes`; gltree prints LF everywhere. They were printed by the consumers' Python tool
   (commit 2a78fa5), which is deleted; a deliberate output change is reviewed and the goldens are
   rewritten from gltree's own output (maintainer, 2026-11-19). `tree-all.txt` is the default
   (finished families left out) and `tree--all.txt` is `tree --all`; fixture #17–#18 is the finished
-  family, #7 the lone closed root, #12 and #15 the families that stay (#25). The fixture moved to headers in #16
+  family, #7 the lone closed root, #12 and #15 the families that stay (#25). Every fixture item but #6
+  carries a `url`, and #5's header holds `[extra] marker`; `check`'s CLI tests run in a clone whose
+  `.gltree.toml` declares `marker` (`clone_declaring_extra_marker`), so the golden holds no finding for it (#26). The fixture moved to headers in #16
   and every tree golden stayed byte for byte (commit aa86291, 2026-10-22).
 - Input bound: a snapshot is read whole into memory; the walk is bounded by the tree.
 

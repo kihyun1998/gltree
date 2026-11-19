@@ -1,19 +1,25 @@
 //! A tree of items under a root, with closed/all descendants per node.
 
+use crate::header;
 use crate::item::{Item, State};
 use crate::scheme::RelationScheme;
 use crate::tracker::{Error, Tracker};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The version of the JSON shape `to_json` prints.
-pub const JSON_VERSION: u32 = 2;
+pub const JSON_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     pub iid: u64,
     pub title: String,
     pub state: State,
+    /// The item's address; `None` when the source did not record it.
+    pub url: Option<String>,
+    pub labels: Vec<String>,
+    /// The header's `[extra]` values, every key taken whether or not the repo config declares it.
+    pub extra: Map<String, Value>,
     pub closed: usize,
     pub total: usize,
     /// The items its `blocked_by` names that are still open.
@@ -173,6 +179,9 @@ fn node(
         iid: n,
         title: it.title.clone(),
         state: it.state,
+        url: it.url.clone(),
+        labels: it.labels.clone(),
+        extra: header::extra_json(&header::loose(&it.desc).header.unwrap_or_default()),
         closed,
         total,
         blocked_by_open: open_blockers(&it.desc, states),
@@ -219,7 +228,9 @@ pub fn to_json(nodes: &[Node]) -> Value {
 
 fn node_json(n: &Node) -> Value {
     json!({
-        "number": n.iid, "title": n.title, "state": n.state.as_str(), "closed": n.closed, "total": n.total,
+        "number": n.iid, "title": n.title, "state": n.state.as_str(),
+        "url": n.url, "labels": n.labels, "extra": n.extra,
+        "closed": n.closed, "total": n.total,
         "blocked_by_open": n.blocked_by_open,
         "children": n.children.iter().map(node_json).collect::<Vec<_>>(),
     })
@@ -246,7 +257,7 @@ mod tests {
         let lines = draw(items.clone(), Some(1));
         assert_eq!(lines[2], "  #3 [open] t3  1/2  blocked by #5");
         let v = to_json(&tree(&FakeTracker::new(items), &FrontMatter, Some(1)).unwrap());
-        assert_eq!(v["version"], 2);
+        assert_eq!(v["version"], 3);
         assert_eq!(v["roots"][0]["children"][1]["blocked_by_open"], json!([5]));
     }
 
@@ -262,13 +273,42 @@ mod tests {
     }
 
     fn three_levels() -> Vec<Item> {
-        vec![
+        let mut items = vec![
             Item::new(1, State::Open, "root", ""),
             item(2, State::Closed, "+++\nparent = 1\n+++\n"),
             item(3, State::Open, "+++\nparent = 1\n+++\n"),
             item(4, State::Closed, "+++\nparent = 3\n+++\n"),
-            item(5, State::Open, "+++\nparent = 3\n+++\n"),
-        ]
+            item(
+                5,
+                State::Open,
+                "+++\nparent = 3\n\n[extra]\nmarker = \"K-1\"\n+++\n",
+            ),
+        ];
+        items[3].url = Some("https://gitlab.example.com/team/app/-/issues/4".into());
+        items[3].labels = vec!["bug".into(), "ui".into()];
+        items
+    }
+
+    #[test]
+    fn every_node_carries_its_url_labels_and_extra() {
+        let nodes = tree(&FakeTracker::new(three_levels()), &FrontMatter, Some(3)).unwrap();
+        let (four, five) = (&nodes[0].children[0], &nodes[0].children[1]);
+        assert_eq!(
+            (four.url.as_deref(), four.labels.clone(), four.extra.clone()),
+            (
+                Some("https://gitlab.example.com/team/app/-/issues/4"),
+                vec!["bug".to_string(), "ui".to_string()],
+                serde_json::Map::new()
+            )
+        );
+        assert_eq!(
+            (
+                five.url.clone(),
+                five.labels.clone(),
+                five.extra.get("marker")
+            ),
+            (None, vec![], Some(&json!("K-1")))
+        );
     }
 
     #[test]
@@ -429,12 +469,16 @@ mod tests {
         assert_eq!(
             v,
             json!({
-                "version": 2,
+                "version": 3,
                 "roots": [{
-                    "number": 3, "title": "t3", "state": "open", "closed": 1, "total": 2, "blocked_by_open": [],
+                    "number": 3, "title": "t3", "state": "open", "url": null, "labels": [], "extra": {},
+                    "closed": 1, "total": 2, "blocked_by_open": [],
                     "children": [
-                        {"number": 4, "title": "t4", "state": "closed", "closed": 0, "total": 0, "blocked_by_open": [], "children": []},
-                        {"number": 5, "title": "t5", "state": "open", "closed": 0, "total": 0, "blocked_by_open": [], "children": []}
+                        {"number": 4, "title": "t4", "state": "closed",
+                         "url": "https://gitlab.example.com/team/app/-/issues/4", "labels": ["bug", "ui"], "extra": {},
+                         "closed": 0, "total": 0, "blocked_by_open": [], "children": []},
+                        {"number": 5, "title": "t5", "state": "open", "url": null, "labels": [], "extra": {"marker": "K-1"},
+                         "closed": 0, "total": 0, "blocked_by_open": [], "children": []}
                     ]
                 }]
             })

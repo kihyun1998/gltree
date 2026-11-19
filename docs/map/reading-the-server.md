@@ -22,7 +22,10 @@ the walk this adapter serves, not the adapter.
   Source: `glab_config_paths`, `login`.
 - **Reads** are GraphQL. `level` writes the item numbers into the query text (`iids:["3","12"]`), at
   most `LEVEL_BATCH` = 100 per request with `linkedItems(first:100)` each; an overflow of linked items
-  is an error, since a short tree would look complete. `all_items` pages 100 at a time with links,
+  is an error, since a short tree would look complete. It asks `webUrl` and labels for each item and
+  each linked item, so a walked tree carries them as a snapshot's does (#26); `brief` reads both, for
+  `level` and `all_items` alike. `level` is one query for every caller: the walk, `live_tree`'s
+  blockers, and `new`, `edit`, `move` and `sync`, so its cost is theirs too. `all_items` pages 100 at a time with links,
   labels, type, `closedAt` and `webUrl`. Comments have reads of their own
   ([keeping-a-snapshot](keeping-a-snapshot.md)).
 - **Writes** are REST under `api/v4/projects/<url-encoded path>`: `POST issues`, `PUT issues/:iid`,
@@ -66,7 +69,9 @@ the walk this adapter serves, not the adapter.
   matches text anywhere in a body; the walk does not use it
   ([ADR-0001](../adr/0001-the-child-records-its-parent-and-links-are-the-way-down.md)).
 - The GraphQL complexity cap on a self-hosted CE is 250; the level query with 100 items fits
-  (commit 2bcb3f2, 2026-10-21).
+  (commit 2bcb3f2, 2026-10-21). With `webUrl` and labels added for each item and each linked item,
+  the same 100 × 100 query was accepted by a self-hosted CE, and the root it read came back with its
+  `url`, `labels` and `extra` filled (one read-only run, 2026-11-19).
 
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.

@@ -18,8 +18,8 @@ finished features.
   implying closed. Source: `roots`, `label_matches`, `check_date`.
 - **JSON** version 2 per root: `number, title, state, labels, closed_at, first_line, url, from, extra,
   blocked_by_open`. `first_line` is the body's first line after the header and its blank lines, without a
-  CR. `from` and `extra` come from `header::loose`: every `[extra]` key is taken whatever the repo config
-  declares, and a header out of form gives none rather than an error, since listing is not checking.
+  CR. `from` and `extra` come from `header::loose`, `extra` through `header::extra_json`, which tree
+  nodes share: every `[extra]` key is taken whatever the repo config declares, and a header out of form gives none rather than an error, since listing is not checking.
   `blocked_by_open` is judged from the same full read (`tree::open_blockers`).
 - gltree knows no outside tracker: label names, and what to do with the roots, are the caller's. Its
   callers are outside skills: a weekly report and an unregistered-feature sweep, which read

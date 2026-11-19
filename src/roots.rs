@@ -132,11 +132,7 @@ pub fn to_json(roots: &[&Item], states: &HashMap<u64, State>) -> Value {
             let split = header::loose(&it.desc);
             let h = split.header.unwrap_or_default();
             let body = split.body.trim_start_matches(['\r', '\n']);
-            let extra: serde_json::Map<String, Value> = h
-                .extra
-                .iter()
-                .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Value::Null)))
-                .collect();
+            let extra = header::extra_json(&h);
             json!({
                 "number": it.iid,
                 "title": it.title,

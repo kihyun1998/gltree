@@ -1,7 +1,7 @@
 # Not recorded is not none
 
 ## The fact
-An item's `links`, `comments` and `closed_at` are `None` when the source did not record them, and an
+An item's `links`, `comments`, `closed_at` and `url` are `None` when the source did not record them, and an
 empty list (or an open item's absent date) only when it did; nothing reads `None` as "there are none".
 
 ## Why it is cross-cutting
@@ -12,7 +12,8 @@ a source that writes `Some(vec![])` for a field it never asked for, makes a comm
 — every link stray, or "no comments" for an item that has them.
 
 ## Territories it holds in
-- [reading-the-server](reading-the-server.md) — `parse_page` sets `links` to `Some` (it asked); `brief` leaves them `None`; `read_item_with_comments` sets them `None`, since it does not ask.
+- [reading-the-server](reading-the-server.md) — `parse_page` sets `links` to `Some` (it asked); `brief` leaves them `None`; `read_item_with_comments` sets them `None`, since it does not ask. `brief` fills `url` and `labels` for every query that reaches it (`level_query`, `page_query`, `page_query_with_comments`, `item_query_with_comments`), and each of them asks `webUrl` and the labels widget; a query that left the widget out would read every item's labels as `[]` with no error.
+- [drawing-a-tree](drawing-a-tree.md) — a node's `url` is `null` in JSON when not recorded (#26). `labels` is outside the rule: it is a list, not an `Option`, so a snapshot saved before labels were kept reads as `[]`, the same as an item with none.
 - [keeping-a-snapshot](keeping-a-snapshot.md) — `parse_comments` returns `None` without the comments widget; the file omits `None` fields and an older file reads them as `None`.
 - [checking-the-tracker](checking-the-tracker.md) — `unlinked` and `stray-link` run only `if let Some(links)`.
 - [migrating-a-tracker](migrating-a-tracker.md) — `plan` plans a link only where `old.links.is_some()`.

@@ -86,7 +86,7 @@ fn all_with_a_root_number_is_a_usage_error() {
 fn json_leaves_out_the_same_families_and_all_brings_them_back() {
     let roots = |args: &[&str]| -> Vec<u64> {
         let v: serde_json::Value = serde_json::from_str(&tree_text(args)).unwrap();
-        assert_eq!(v["version"], 2);
+        assert_eq!(v["version"], 3);
         v["roots"]
             .as_array()
             .unwrap()
@@ -137,9 +137,35 @@ fn a_tracker_of_only_finished_families_draws_nothing_and_exits_0() {
 fn json_prints_the_versioned_tree() {
     let v: serde_json::Value =
         serde_json::from_str(&tree_text(&["tree", "3", "--snapshot", FIXTURE, "--json"])).unwrap();
-    assert_eq!(v["version"], 2);
+    assert_eq!(v["version"], 3);
     assert_eq!(v["roots"][0]["blocked_by_open"], serde_json::json!([]));
     assert_eq!(v["roots"][0]["number"], 3);
+    assert_eq!(
+        (
+            v["roots"][0]["url"].clone(),
+            v["roots"][0]["labels"].clone(),
+            v["roots"][0]["extra"].clone()
+        ),
+        (
+            "https://gitlab.example.com/team/app/-/issues/3".into(),
+            serde_json::json!([]),
+            serde_json::json!({})
+        )
+    );
+    assert_eq!(
+        v["roots"][0]["children"][0]["extra"],
+        serde_json::json!({"marker": "K-1"})
+    );
+    assert_eq!(v["roots"][0]["children"][1]["url"], serde_json::Value::Null);
+    let one: serde_json::Value =
+        serde_json::from_str(&tree_text(&["tree", "1", "--snapshot", FIXTURE, "--json"])).unwrap();
+    assert_eq!(
+        (
+            one["roots"][0]["labels"].clone(),
+            one["roots"][0]["children"][0]["labels"].clone()
+        ),
+        (serde_json::json!(["SPEC"]), serde_json::json!(["feature"]))
+    );
     assert_eq!(
         (
             v["roots"][0]["closed"].clone(),
@@ -186,16 +212,41 @@ fn a_live_tree_outside_a_clone_says_where_to_run_it() {
     );
 }
 
+fn clone_declaring_extra_marker(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("gltree-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(dir.join(".gltree.toml"), "extra_keys = [\"marker\"]\n").unwrap();
+    dir
+}
+
+fn fixture_path() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(FIXTURE)
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn check_matches_its_golden_and_exits_1() {
-    let out = gltree(&["check", "--snapshot", FIXTURE]);
+    let dir = clone_declaring_extra_marker("check-golden");
+    let out = gltree_in(&dir, &["check", "--snapshot", &fixture_path()]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8(out.stdout).unwrap(), golden("check.txt"));
 }
 
 #[test]
 fn check_json_lists_each_finding() {
-    let out = gltree(&["check", "--snapshot", FIXTURE, "--json"]);
+    let dir = clone_declaring_extra_marker("check-json");
+    let out = gltree_in(&dir, &["check", "--snapshot", &fixture_path(), "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["version"], 1);
     assert_eq!(v["findings"].as_array().unwrap().len(), 9);

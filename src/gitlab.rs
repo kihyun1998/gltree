@@ -263,10 +263,12 @@ pub fn level_query(project: &str, iids: &[u64]) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "query{{project(fullPath:{project}){{workItems(iids:[{iids}],first:{LEVEL_BATCH}){{nodes{{iid title state widgets{{\
+        "query{{project(fullPath:{project}){{workItems(iids:[{iids}],first:{LEVEL_BATCH}){{nodes{{iid title state webUrl widgets{{\
          ... on WorkItemWidgetDescription{{description}} \
+         ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}} \
          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{\
-         iid title state widgets{{... on WorkItemWidgetDescription{{description}}}}}}}}}}}}}}}}}}}}}}",
+         iid title state webUrl widgets{{... on WorkItemWidgetDescription{{description}} \
+         ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}}}}}}}}}}}}}}}}}}}}}",
         project = Value::String(project.into())
     )
 }
@@ -538,14 +540,7 @@ pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
             .unwrap_or("Issue")
             .to_lowercase();
         item.closed_at = n["closedAt"].as_str().map(String::from);
-        item.url = n["webUrl"].as_str().map(String::from);
         let widgets: Vec<&Value> = n["widgets"].as_array().into_iter().flatten().collect();
-        item.labels = widgets
-            .iter()
-            .filter_map(|w| w.pointer("/labels/nodes").and_then(Value::as_array))
-            .flatten()
-            .filter_map(|l| l["title"].as_str().map(String::from))
-            .collect();
         let links = widgets.iter().find_map(|w| w.get("linkedItems"));
         if links
             .and_then(|l| l.pointer("/pageInfo/hasNextPage"))
@@ -594,13 +589,20 @@ fn brief(n: &Value) -> Result<Item, Error> {
         Some("CLOSED") => State::Closed,
         _ => return Err(bad()),
     };
-    let desc = n["widgets"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let widgets: Vec<&Value> = n["widgets"].as_array().into_iter().flatten().collect();
+    let desc = widgets
+        .iter()
         .find_map(|w| w.get("description").and_then(Value::as_str))
         .unwrap_or("");
-    Ok(Item::new(iid, state, title, desc))
+    let mut item = Item::new(iid, state, title, desc);
+    item.url = n["webUrl"].as_str().map(String::from);
+    item.labels = widgets
+        .iter()
+        .filter_map(|w| w.pointer("/labels/nodes").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|l| l["title"].as_str().map(String::from))
+        .collect();
+    Ok(item)
 }
 
 #[cfg(test)]
@@ -1051,6 +1053,54 @@ mod tests {
             "{q}"
         );
         assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+    }
+
+    #[test]
+    fn the_level_query_asks_the_url_and_labels_of_each_item_and_each_linked_item() {
+        let q = level_query("team/app", &[3]);
+        let (own, linked) = q.split_once("linkedItems").unwrap();
+        for part in [own, linked] {
+            assert!(part.contains("webUrl"), "{part}");
+            assert!(
+                part.contains("... on WorkItemWidgetLabels{labels{nodes{title}}}"),
+                "{part}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_level_answer_gives_the_url_and_labels_of_each_item_and_each_linked_item() {
+        let dressed = |iid: u64, labels: &[&str]| {
+            let mut v = wi(iid, "OPEN", "", None);
+            v["webUrl"] = json!(format!(
+                "https://gitlab.example.com/team/app/-/issues/{iid}"
+            ));
+            v["widgets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "labels": { "nodes":
+                labels.iter().map(|l| json!({ "title": l })).collect::<Vec<_>>() } }));
+            v
+        };
+        let mut top = dressed(3, &["SPEC"]);
+        top["widgets"].as_array_mut().unwrap().push(json!({ "linkedItems": {
+            "pageInfo": { "hasNextPage": false }, "nodes": [{ "workItem": dressed(5, &["bug", "ui"]) }] } }));
+        let got = parse_level(&level_answer(vec![top])).unwrap();
+        let l = &got[&3];
+        assert_eq!(
+            (l.item.url.as_deref(), l.item.labels.clone()),
+            (
+                Some("https://gitlab.example.com/team/app/-/issues/3"),
+                vec!["SPEC".to_string()]
+            )
+        );
+        assert_eq!(
+            (l.linked[0].url.as_deref(), l.linked[0].labels.clone()),
+            (
+                Some("https://gitlab.example.com/team/app/-/issues/5"),
+                vec!["bug".to_string(), "ui".to_string()]
+            )
+        );
     }
 
     #[test]

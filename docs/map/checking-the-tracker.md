@@ -42,7 +42,10 @@ snapshot), one finding per break, in a fixed order; exit 1 when there is any.
 - **The full read** is paged GraphQL, 100 items a page, with type, labels and link ends; an item
   whose links overflow one page fails the read, since `unlinked` needs every link
   ([reading-the-server](reading-the-server.md), `parse_page`).
-- **Tests**: `tests/golden/check.txt` against `tests/fixtures/tracker.json` (`tests/cli.rs`). The
+- **Tests**: `tests/golden/check.txt` against `tests/fixtures/tracker.json` (`tests/cli.rs`), run in a
+  clone whose `.gltree.toml` declares `marker` (`clone_declaring_extra_marker`): fixture #5 holds
+  `[extra] marker`, so from the repository root, which has no config, `check` adds a `header`
+  finding for it (#26). The
   golden was first printed by the consumers' Python tool, since deleted; a deliberate output change
   is now reviewed and the golden rewritten from gltree's own output (maintainer, 2026-11-19).
 
