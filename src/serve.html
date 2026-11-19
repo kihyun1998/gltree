@@ -82,18 +82,17 @@ const dot=n=>'<span class="dot '+shut(n)+'"></span>';
 const title=n=>'<span class="title '+shut(n)+'">'+esc(n.title)+'</span>';
 const blk=n=>n.blocked_by_open.length?'<span class="blk">blocked by '+n.blocked_by_open.map(b=>'#'+esc(b)).join(', ')+'</span>':'';
 const flat=(n,d=0,o=[])=>{o.push({n,d});n.children.forEach(c=>flat(c,d+1,o));return o};
-const visible=()=>data?data.tree.roots.filter(r=>showAll||!finished(r)):[];
 function marks(r){return data.badges.map(b=>{const l=r.labels.find(x=>x.startsWith(b.prefix));
  if(l!==undefined)return{b,value:l.slice(b.prefix.length)};
  if(r.state==='closed'&&b.missing!=null)return{b,missing:true};return null}).filter(Boolean)}
 const chip=m=>m.missing?'<span class="badge todo">'+esc(m.b.name)+': '+esc(m.b.missing)+'</span>':'<span class="badge val">'+esc(m.b.name)+': '+esc(m.value)+'</span>';
-function buildFilters(roots){filters=[{key:'all',label:'All',test:()=>true}];
+function buildFilters(roots){filters=[{key:'all',label:'All',test:r=>showAll||!finished(r)}];
  data.badges.forEach((b,i)=>{const vals=[...new Set(roots.flatMap(r=>marks(r).filter(m=>m.b===b&&!m.missing).map(m=>m.value)))].sort();
   vals.forEach(v=>filters.push({key:JSON.stringify([i,v]),label:b.name+': '+v,test:r=>marks(r).some(m=>m.b===b&&m.value===v)}));
   if(b.missing!=null)filters.push({key:JSON.stringify([i]),label:b.name+': '+b.missing,test:r=>marks(r).some(m=>m.b===b&&m.missing)})});
  if(!filters.some(f=>f.key===flt))flt='all'}
-function hero(roots){const open=roots.flatMap(r=>flat(r)).filter(x=>x.n.state==='open').length;
- const kpi=[[roots.length,'families'],[open,'open items']].concat(data.badges.filter(b=>b.missing!=null).map(b=>[roots.filter(r=>marks(r).some(m=>m.b===b&&m.missing)).length,b.name+': '+b.missing]));
+function hero(roots,every){const open=roots.flatMap(r=>flat(r)).filter(x=>x.n.state==='open').length;
+ const kpi=[[roots.length,'families'],[open,'open items']].concat(data.badges.filter(b=>b.missing!=null).map(b=>[every.filter(r=>marks(r).some(m=>m.b===b&&m.missing)).length,b.name+': '+b.missing]));
  return '<div class="hero in-up"><h2>Issue tree</h2><div class="kpi">'+kpi.map(([n,t])=>'<div><b data-roll="'+n+'">0</b><span>'+esc(t)+'</span></div>').join('')+'</div></div>'}
 function link(u,cls,inner,extra){const h=safeUrl(u);return h?'<a class="'+cls+'" href="'+esc(h)+'" target="_blank" rel="noopener noreferrer"'+(extra||'')+'>'+inner+'</a>':'<div class="'+cls+'"'+(extra||'')+'>'+inner+'</div>'}
 function detail(r,note){if(!r)return '<div class="detail swap" id="det"><div class="empty">Nothing left to do</div></div>';
@@ -104,9 +103,9 @@ function detail(r,note){if(!r)return '<div class="detail swap" id="det"><div cla
    return '<div class="fieldbox">'+chip(m)+(v!=null?'<div><div class="k">extra.'+esc(m.b.extra)+'</div><code>'+esc(text(v))+'</code></div>':m.missing?'<div class="num">Closed with no '+esc(m.b.prefix)+' label</div>':'')+'</div>'}).join('')
  +(note?'<div class="stale">'+esc(note)+'</div>':'')
  +'<div class="tree">'+flat(r).slice(1).map(({n,d},i)=>link(n.url,'node in-up',dot(n)+'<span class="num">#'+esc(n.number)+'</span>'+title(n)+blk(n)+n.labels.map(l=>'<span class="chip" style="margin-left:6px">'+esc(l)+'</span>').join('')+(safeUrl(n.url)?'<span class="go">↗</span>':''),' style="padding-left:'+(8+(d-1)*22)+'px;animation-delay:'+(i*40)+'ms"')).join('')+'</div></div>'}
-function view(){const all=visible();buildFilters(all);const roots=all.filter(filters.find(f=>f.key===flt).test);
+function view(){const every=data.tree.roots;buildFilters(every);const shown=every.filter(filters[0].test),roots=every.filter(filters.find(f=>f.key===flt).test);
  if(!roots.find(r=>r.number===sel))sel=roots.length?roots[0].number:null;const r=roots.find(x=>x.number===sel);
- return hero(all)+'<div class="split in-up"><div><div class="filters">'+filters.map((f,i)=>'<button data-f="'+i+'" class="'+(f.key===flt?'on':'')+'">'+esc(f.label)+(i?' '+all.filter(f.test).length:'')+'</button>').join('')+'</div><div class="list" id="lst"><span class="hl"></span>'
+ return hero(shown,every)+'<div class="split in-up"><div><div class="filters">'+filters.map((f,i)=>'<button data-f="'+i+'" class="'+(f.key===flt?'on':'')+'">'+esc(f.label)+(i?' '+every.filter(f.test).length:'')+'</button>').join('')+'</div><div class="list" id="lst"><span class="hl"></span>'
  +(roots.length?roots.map(x=>'<button class="li" data-s="'+esc(x.number)+'">'+dot(x)+'<span>'+title(x)+'<small>#'+esc(x.number)+(x.total?' · '+esc(x.closed)+'/'+esc(x.total):'')+blk(x)+'</small></span><span class="r"><span class="num">'+pct(x)+'%</span>'+marks(x).map(chip).join('')+'</span></button>').join(''):'<div class="empty">None</div>')+'</div></div>'+detail(cur&&r&&cur.number===r.number?cur:r)+'</div>'}
 function roll(){const still=typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches;document.querySelectorAll('[data-roll]').forEach(el=>{const to=+el.dataset.roll,t0=performance.now();if(still){el.textContent=to;return}const f=t=>{const k=Math.min(1,(t-t0)/700);el.textContent=Math.round(to*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)})}
 function moveHl(){const l=$('#lst');if(!l)return;const b=l.querySelector('[data-s="'+sel+'"]'),h=l.querySelector('.hl');if(b){h.style.opacity=1;h.style.top=b.offsetTop+'px';h.style.height=b.offsetHeight+'px'}else h.style.opacity=0}

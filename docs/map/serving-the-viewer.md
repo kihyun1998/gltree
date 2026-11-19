@@ -56,10 +56,15 @@ reasons below.
   framework, no build step, and no outside address in it (a unit test refuses `://`). Its layout and
   motion follow the Split prototype the maintainer chose (2026-11-19). It applies the finished-family
   toggle itself with `tree`'s rule — a root closed with `closed == total` — and computes badges,
-  filters and counts from `labels`, `extra` and the config's `badges`. A chosen filter is held by
-  its badge and value, not its place in the list, since the list is rebuilt from what is visible.
-  Open blockers show on every node, the root in the list and the detail included. Counting motion
-  is off under reduced motion, as the CSS animations are.
+  filters and counts from `labels`, `extra` and the config's `badges`. The toggle is the "All"
+  filter's own test, so it governs the "All" list and the families count (a finished family has no
+  open item, so the open-items count does not move with it). Every badge count (hero and filter
+  buttons), every badge filter's values and every badge filter's list span all families, finished
+  ones included: `missing` only ever marks a closed root, which the toggle would mostly hide, and
+  the maintainer chose the same for value filters (issue #27, user story 15; a judgement,
+  2026-11-19). A chosen filter is held by its badge and value, not its place in the list, since the
+  list is rebuilt on every render. Open blockers show on every node, the root in the list and the
+  detail included. Counting motion is off under reduced motion, as the CSS animations are.
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
   `http:` or `https:` URL** (`safeUrl`); any other `url`, `null` included, renders the node
   without a link. `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them

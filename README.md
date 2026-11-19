@@ -236,7 +236,7 @@ gltree migrate --from-word Origin --apply                    # write it to the s
 Turns a tracker written in the first-line format into headers. The old head is the key lines at
 the top of a body, blank lines between them allowed: `Parent: #N`, `From: #N` (and each
 `--from-word`), `Related: #N, #M` (and each `--related-word`), `Blocked by` / `Depends on`, and a
-line whose key is a declared extra key (`NIT:` for `extra_keys = ["nit"]`). Text after the numbers
+line whose key is a declared extra key (`Marker:` for `extra_keys = ["marker"]`). Text after the numbers
 becomes the key's note. The head ends at the first line that is none of these — a key line that
 names no issue number, such as `Blocked by: none`, stays in the body — and the body from there is
 kept byte for byte. Then every derived list is filled over the whole tracker, and every reference
@@ -271,10 +271,11 @@ gltree serve --port 0                    # a free port
 
 Starts a local web server on `127.0.0.1` only, reads the whole tracker once, then prints its address
 and serves a page until Ctrl+C. On the left are the families, as `gltree tree` with no number picks
-them (the finished ones behind a toggle), each with its progress and badges; on the right the
-selected family's tree, read fresh when it is selected, with every item linked to its page on the
-server. The refresh button reads the whole tracker again, which takes as long as `gltree tree` does
-without a number. The page fetches nothing from the internet, follows the system's light or dark
+them (the finished ones behind a toggle), each with its progress and badges. A filter per badge
+value, and per badge's `missing`, lists every family that shows it, finished ones included, and
+the badge counts span every family too. On the right is the selected family's tree, read fresh
+when it is selected, with every item linked to its page on the server. The refresh button reads the
+whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
 the token stays in the server process.
 
