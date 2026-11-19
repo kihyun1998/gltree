@@ -75,7 +75,11 @@ Where a tracker records the parent and how a tree is walked down.
 The rule for when an item may be closed or open against its descendants.
 
 **Extra key**:
-A key the repo config declares for the header's `[extra]` table; gltree keeps it as written and never reads it.
+A key the repo config declares for the header's `[extra]` table; gltree keeps it as written and gives it no meaning, passing its value to callers (`roots --json`, `tree --json`, a `serve` badge).
+
+**Badge**:
+A label prefix the repo config names for `serve` to show on roots: a root's label that starts with it is shown, the rest of the label as its value. gltree knows no badge by name.
+_Avoid_: marker (a consumer's own word for theirs), tag
 
 **Repo config**:
-The file a consuming repo commits to say it uses gltree and which root label, relation scheme, state policy and extra keys it takes.
+The file a consuming repo commits to say it uses gltree and which root label, relation scheme, state policy, extra keys and badges it takes.

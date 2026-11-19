@@ -3,7 +3,7 @@
 ## What it is
 `.gltree.toml` at a consuming repo's top level: whether the repo uses gltree at all (the opt-in that
 every write needs) and which rules it takes — root label, relation scheme, state policy, extra keys,
-its own first-line words.
+its own first-line words, and the badges `serve` shows.
 
 ## Governing decisions
 - [ADR-0002](../adr/0002-gltree-owns-the-tree-convention.md) — the per-repo choices live in that
@@ -16,15 +16,20 @@ its own first-line words.
   `--dry-run` refuse without it (`write::require_opt_in`), before any login, since `main` calls it
   before `server()`. Reading never needs it.
 - Every key is optional: `root_label` (default `SPEC`), `relation_scheme` (`front-matter` only),
-  `state_policy` (`roots-only` or `every-parent`), `extra_keys` (bare TOML keys), `old_head_keys`.
-  Source: `RepoConfig::parse`, `SCHEMES`, `POLICIES`.
+  `state_policy` (`roots-only` or `every-parent`), `extra_keys` (bare TOML keys), `old_head_keys`,
+  `badges`. Source: `RepoConfig::parse`, `SCHEMES`, `POLICIES`.
+- **`[[badges]]`** (#27): each `prefix` (not empty) and `name`, an optional `extra` and an optional
+  `missing`; a badge takes no other key (`deny_unknown_fields` on `Badge`). An `extra` not in
+  `extra_keys` stops every command, not only `serve`, since the check is in `parse`. The key names
+  were picked by the worker (2026-11-19); `serve` is the only reader
+  ([serving-the-viewer](serving-the-viewer.md)).
 - **Unknown keys and values stop every command**, naming the known ones (`#[serde(deny_unknown_fields)]`
   on `File`). So a config still naming retired settings (`origin_word`, `links`) fails, and a gltree
   older than a key a consumer adds fails on that consumer's config — the reason a consumer writes a
   version floor beside its config (read in a consumer's config, 2026-11-19).
 
 ## Code
-- `src/config.rs — FILE, SCHEMES, POLICIES, RepoConfig, RepoConfig::parse, RepoConfig::scheme, RepoConfig::policy, RepoConfig::of_clone, bare_key, toplevel`
+- `src/config.rs — FILE, SCHEMES, POLICIES, RepoConfig, Badge, RepoConfig::parse, RepoConfig::scheme, RepoConfig::policy, RepoConfig::of_clone, bare_key, toplevel`
 - `src/write.rs — require_opt_in`
 - `src/main.rs — run` (reads the config once, before the command)
 
@@ -39,6 +44,7 @@ its own first-line words.
 - [judging-an-items-state](judging-an-items-state.md) — the policy is built here.
 - [holding-references-in-the-header](holding-references-in-the-header.md) — `extra_keys` decides which `[extra]` keys `parse` accepts.
 - [checking-the-tracker](checking-the-tracker.md) — `old_head_keys` widens `old-header`.
+- [serving-the-viewer](serving-the-viewer.md) — `badges` is shown there; a key renamed here is a page that shows nothing.
 
 ## Known holes / open
 - `root_label` is parsed and defaulted but nothing reads it (`git grep root_label -- src`: only `src/config.rs`) (commit 6be32e0, 2026-10-22, recorded it; still true at HEAD).

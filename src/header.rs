@@ -25,7 +25,7 @@ pub struct Header {
     pub blocks: Vec<u64>,
     /// One reason per reference key, as written.
     pub notes: BTreeMap<String, String>,
-    /// Keys the repo config declares, kept as written and never read.
+    /// Keys the repo config declares, kept as written and given no meaning.
     pub extra: BTreeMap<String, toml::Value>,
 }
 

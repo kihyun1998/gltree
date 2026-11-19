@@ -22,6 +22,7 @@ A linked note graph of what gltree does. It answers two questions before a chang
 - [Migrating a tracker](migrating-a-tracker.md)
 - [Keeping a snapshot](keeping-a-snapshot.md)
 - [Showing an item](showing-an-item.md)
+- [Serving the viewer](serving-the-viewer.md)
 - [Reading the repo config](reading-the-repo-config.md)
 - [The command-line contract](the-command-line-contract.md)
 - [Shipping a release](shipping-a-release.md)
@@ -29,6 +30,7 @@ A linked note graph of what gltree does. It answers two questions before a chang
 ## Invariants
 - [Every reference has a link, and every link has a reference](every-reference-has-a-link.md)
 - [Not recorded is not none](not-recorded-is-not-none.md)
+- [One rule for a finished family](one-rule-for-a-finished-family.md)
 
 ## How to read it
 - `## Blast radius` is a checklist: each edge names what goes wrong over there. An item with nothing to do is a correct outcome.
@@ -51,6 +53,6 @@ absent note means nothing does.
 ## The shape
 A pure core — the header, the derived lists, check, tree, roots, migrate, show — works on `Item`
 values behind one port (`Tracker`), with three adapters: the GitLab server, a snapshot file, and an
-in-memory fake for tests. `src/main.rs` reads the repo config once and dispatches. The largest gap:
+in-memory fake for tests. `src/main.rs` reads the repo config once and dispatches; `src/serve.rs` serves a local page and a JSON API over the same core. The largest gap:
 callers outside the repository read its JSON and flags, and nothing in the repository checks those
 fields against what they read.

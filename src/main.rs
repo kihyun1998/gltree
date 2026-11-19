@@ -8,14 +8,16 @@ use gltree::login;
 use gltree::migrate;
 use gltree::remote::Remote;
 use gltree::roots;
+use gltree::serve;
 use gltree::show;
 use gltree::snapshot::SnapshotFile;
-use gltree::tracker::Tracker;
+use gltree::tracker::{Error as TrackerError, Tracker};
 use gltree::tree;
 use gltree::write;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
@@ -192,6 +194,15 @@ enum Command {
         /// The file to write
         out: PathBuf,
     },
+    /// A local page of the tracker's families and trees, on 127.0.0.1 only, read again on refresh
+    Serve {
+        /// The port to listen on; 0 takes a free one
+        #[arg(long, default_value_t = serve::DEFAULT_PORT)]
+        port: u16,
+        /// Read the tracker from a snapshot file instead of the server; refresh reads the file again
+        #[arg(long)]
+        snapshot: Option<PathBuf>,
+    },
 }
 
 /// `key=value` for `--set-extra`.
@@ -209,18 +220,19 @@ fn parse_iid(s: &str) -> Result<u64, String> {
 }
 
 /// The tracker of the clone gltree runs in, through the user's glab login.
-fn server() -> Result<GitLab, Box<dyn std::error::Error>> {
-    let remote = Remote::of_clone(&std::env::current_dir()?)?;
+fn server() -> Result<GitLab, TrackerError> {
+    let dir = std::env::current_dir().map_err(|e| TrackerError::Source(e.to_string()))?;
+    let remote = Remote::of_clone(&dir)?;
     let env = |k: &str| std::env::var(k).ok();
     let yaml = login::glab_config_paths(&env, std::env::home_dir())
         .into_iter()
         .find_map(|p| std::fs::read_to_string(p).ok());
     let login = login::login(yaml.as_deref(), &remote.host, &env)?;
-    Ok(GitLab::new(login, &remote.path)?)
+    GitLab::new(login, &remote.path)
 }
 
 /// The snapshot when one is named, else the server.
-fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker>, Box<dyn std::error::Error>> {
+fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker>, TrackerError> {
     Ok(match snapshot {
         Some(path) => Box::new(SnapshotFile { path }),
         None => Box::new(server()?),
@@ -543,6 +555,18 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     writeln!(out, "{line}")?;
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Serve { port, snapshot } => {
+            let listener = serve::bind(port).map_err(|e| format!("127.0.0.1:{port}: {e}"))?;
+            let port = listener.local_addr()?.port();
+            let walk = snapshot.is_none();
+            let open: serve::Open = Box::new(move || source(snapshot.clone()));
+            let app = Arc::new(serve::App::new(open, walk, config, port));
+            app.refresh()?;
+            writeln!(out, "http://127.0.0.1:{port}/")?;
+            out.flush()?;
+            serve::serve(listener, app)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Snapshot { out: path } => {

@@ -14,6 +14,7 @@ a source that writes `Some(vec![])` for a field it never asked for, makes a comm
 ## Territories it holds in
 - [reading-the-server](reading-the-server.md) — `parse_page` sets `links` to `Some` (it asked); `brief` leaves them `None`; `read_item_with_comments` sets them `None`, since it does not ask. `brief` fills `url` and `labels` for every query that reaches it (`level_query`, `page_query`, `page_query_with_comments`, `item_query_with_comments`), and each of them asks `webUrl` and the labels widget; a query that left the widget out would read every item's labels as `[]` with no error.
 - [drawing-a-tree](drawing-a-tree.md) — a node's `url` is `null` in JSON when not recorded (#26). `labels` is outside the rule: it is a list, not an `Option`, so a snapshot saved before labels were kept reads as `[]`, the same as an item with none.
+- [serving-the-viewer](serving-the-viewer.md) — the page reads `labels` the same way: a snapshot saved before labels were kept gives every closed root a badge's `missing` state, since `[]` there cannot say "not recorded" (open for the maintainer, 2026-11-19).
 - [keeping-a-snapshot](keeping-a-snapshot.md) — `parse_comments` returns `None` without the comments widget; the file omits `None` fields and an older file reads them as `None`.
 - [checking-the-tracker](checking-the-tracker.md) — `unlinked` and `stray-link` run only `if let Some(links)`.
 - [migrating-a-tracker](migrating-a-tracker.md) — `plan` plans a link only where `old.links.is_some()`.

@@ -25,6 +25,9 @@ finished features.
   callers are outside skills: a weekly report and an unregistered-feature sweep, which read
   `extra` for a registration marker and filter with `--closed-since` / `--closed-until` and
   `--without-label` prefixes (read in those skills, 2026-11-19; not named here, maintainer, 2026-11-19).
+  `serve`'s badges keep this: the repo config names the label prefixes to show, and gltree knows none
+  by name ([serving-the-viewer](serving-the-viewer.md)). A badge's `missing` counts every root `tree`
+  draws, so a closed item whose parent is absent counts there and not here.
 
 ## Code
 - `src/roots.rs — Filter, label_matches, check_date, roots, closed_day, render, to_json, JSON_VERSION`

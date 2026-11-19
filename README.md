@@ -261,6 +261,39 @@ fixed. It refuses a header out of form. Writing needs `.gltree.toml`; `--dry-run
 Text: `#N key [before] -> [after]` per change; `--json` prints
 `{"version": 1, "written", "changes": [{item, key, before, after}]}`.
 
+## Serve
+
+```sh
+gltree serve                             # http://127.0.0.1:7420/, read from the server
+gltree serve --snapshot tracker.json     # from a file; refresh reads the file again
+gltree serve --port 0                    # a free port
+```
+
+Starts a local web server on `127.0.0.1` only, reads the whole tracker once, then prints its address
+and serves a page until Ctrl+C. On the left are the families, as `gltree tree` with no number picks
+them (the finished ones behind a toggle), each with its progress and badges; on the right the
+selected family's tree, read fresh when it is selected, with every item linked to its page on the
+server. The refresh button reads the whole tracker again, which takes as long as `gltree tree` does
+without a number. The page fetches nothing from the internet, follows the system's light or dark
+mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
+the token stays in the server process.
+
+The page reads a small JSON API:
+
+- `GET /api/families`: the last full read, `{"version": 1, "read_at", "badges", "tree"}`, where
+  `tree` is `gltree tree --all --json` (version 3), `read_at` is a UTC time and `badges` the repo
+  config's list.
+- `POST /api/refresh`: reads the whole tracker again and answers the same shape.
+- `GET /api/tree/N`: N's tree as `gltree tree N --json` gives it, read fresh; 404 for a number the
+  tracker does not hold.
+
+An error answers `{"version": 1, "error"}`: 404 for an unknown path or number, 405 (with
+`Allow`) for a known path asked with another method, 400 and 413 for a request it cannot read or a
+body it does not take, 502 when the tracker could not be read. The server answers only requests
+addressed to `127.0.0.1` or `localhost` at its port (403 otherwise), and the API only its own page:
+a refresh from another site's page, or any API call a browser marks as coming from another site, is
+refused before anything is read.
+
 ## Repo config
 
 A consuming repo commits `.gltree.toml` at its root; every key is optional:
@@ -271,6 +304,18 @@ relation_scheme = "front-matter"  # known: front-matter
 state_policy = "roots-only"       # or "every-parent": every parent stays open while a child is open
 extra_keys = ["marker"]           # keys the header's [extra] may hold, kept as written
 old_head_keys = ["Origin"]        # the repo's own first-line words, so check reports one left in a body
+
+[[badges]]                        # a label prefix gltree serve shows as a badge on roots; repeat for more
+prefix = "reg::"                  # a root's label starting with it is shown, the rest as its value
+name = "Registration"
+extra = "marker"                  # optional: an extra key whose value is shown beside it
+missing = "undecided"             # optional: what a closed root without such a label shows
 ```
+
+gltree knows no badge by name: the repo says which label prefixes to show, and the page shows the
+label and, beside it, the `[extra]` value it names, as `tree --json` passes them through. A badge's
+`extra` must be one of `extra_keys`; otherwise every command stops at start, as on any other config
+error. A gltree older than a key here refuses the config, so state the version that reads it beside
+the file.
 
 Exit status: 0 on success, 1 when `check` finds anything, 2 on a usage, input, config or server error.

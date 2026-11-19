@@ -3,7 +3,7 @@
 use crate::check::{EveryParent, RootsOnly, StatePolicy};
 use crate::scheme::{FrontMatter, RelationScheme};
 use crate::tracker::Error;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,13 +16,27 @@ pub struct RepoConfig {
     pub root_label: String,
     pub relation_scheme: String,
     pub state_policy: String,
-    /// The keys the repo's header may hold under `[extra]`, kept as written and never read.
+    /// The keys the repo's header may hold under `[extra]`, kept as written and given no meaning.
     pub extra_keys: Vec<String>,
     /// The repo's own words of the first-line format, beyond the ones `check` knows, so a body
     /// still opening with one is reported as `old-header`.
     pub old_head_keys: Vec<String>,
+    /// The label prefixes `serve` shows as badges on roots; gltree reads them and knows none by name.
+    pub badges: Vec<Badge>,
     /// Whether the repo committed a config file, which is what lets gltree write to its tracker.
     pub present: bool,
+}
+
+/// A label prefix shown as a badge on a root, the label's rest being its value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Badge {
+    pub prefix: String,
+    pub name: String,
+    /// An `[extra]` key whose value is shown beside the badge; one of `extra_keys`.
+    pub extra: Option<String>,
+    /// What to show for a closed root that carries no label with the prefix.
+    pub missing: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +47,7 @@ struct File {
     state_policy: Option<String>,
     extra_keys: Option<Vec<String>>,
     old_head_keys: Option<Vec<String>>,
+    badges: Option<Vec<Badge>>,
 }
 
 impl RepoConfig {
@@ -43,6 +58,7 @@ impl RepoConfig {
             state_policy: POLICIES[0].into(),
             extra_keys: vec![],
             old_head_keys: vec![],
+            badges: vec![],
             present: false,
         }
     }
@@ -68,6 +84,22 @@ impl RepoConfig {
                 "{FILE}: extra key `{bad}` must be a bare TOML key: letters, digits, `_` or `-`"
             )));
         }
+        let badges = f.badges.unwrap_or_default();
+        for b in &badges {
+            if b.prefix.is_empty() {
+                return Err(Error::Malformed(format!(
+                    "{FILE}: a badge's prefix must not be empty"
+                )));
+            }
+            if let Some(key) = &b.extra
+                && !extra_keys.contains(key)
+            {
+                return Err(Error::Malformed(format!(
+                    "{FILE}: badge `{}` names extra key `{key}`, which extra_keys does not declare",
+                    b.prefix
+                )));
+            }
+        }
         Ok(RepoConfig {
             root_label: f.root_label.unwrap_or(d.root_label),
             relation_scheme: known(
@@ -79,6 +111,7 @@ impl RepoConfig {
             state_policy: known("state_policy", f.state_policy, POLICIES, d.state_policy)?,
             extra_keys,
             old_head_keys: f.old_head_keys.unwrap_or_default(),
+            badges,
             present: true,
         })
     }
@@ -218,6 +251,54 @@ mod tests {
                 .judge(&parent, &family)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn badges_are_read_with_their_optional_parts() {
+        let c = RepoConfig::parse(Some(
+            "extra_keys = [\"marker\"]\n\n[[badges]]\nprefix = \"reg::\"\nname = \"Registration\"\nextra = \"marker\"\nmissing = \"undecided\"\n\n[[badges]]\nprefix = \"area::\"\nname = \"Area\"\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            c.badges,
+            [
+                Badge {
+                    prefix: "reg::".into(),
+                    name: "Registration".into(),
+                    extra: Some("marker".into()),
+                    missing: Some("undecided".into()),
+                },
+                Badge {
+                    prefix: "area::".into(),
+                    name: "Area".into(),
+                    extra: None,
+                    missing: None,
+                },
+            ]
+        );
+        assert!(RepoConfig::defaults().badges.is_empty());
+    }
+
+    #[test]
+    fn a_badge_naming_an_undeclared_extra_key_is_refused() {
+        let e = RepoConfig::parse(Some(
+            "extra_keys = [\"marker\"]\n[[badges]]\nprefix = \"reg::\"\nname = \"R\"\nextra = \"other\"\n",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("other") && e.contains("extra_keys"), "{e}");
+    }
+
+    #[test]
+    fn a_badge_needs_a_prefix_and_a_name_and_takes_no_other_key() {
+        for bad in [
+            "[[badges]]\nname = \"R\"\n",
+            "[[badges]]\nprefix = \"reg::\"\n",
+            "[[badges]]\nprefix = \"\"\nname = \"R\"\n",
+            "[[badges]]\nprefix = \"reg::\"\nname = \"R\"\ncolour = \"red\"\n",
+        ] {
+            assert!(RepoConfig::parse(Some(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]

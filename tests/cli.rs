@@ -525,13 +525,16 @@ fn outside_a_clone(name: &str) -> std::path::PathBuf {
     dir
 }
 
-fn gltree_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gltree"))
-        .args(args)
+fn gltree_cmd(dir: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gltree"));
+    cmd.args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
-        .output()
-        .unwrap()
+        .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap());
+    cmd
+}
+
+fn gltree_in(dir: &Path, args: &[&str]) -> Output {
+    gltree_cmd(dir, args).output().unwrap()
 }
 
 #[test]
@@ -783,4 +786,199 @@ fn a_bare_file_name_as_the_target_works_and_leaves_nothing_beside_it() {
         .collect();
     names.sort();
     assert_eq!(names, ["new.json", "old.json"]);
+}
+
+struct Served {
+    child: std::process::Child,
+    base: String,
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn clone_with_config(name: &str, config: &str) -> std::path::PathBuf {
+    let dir = clone_declaring_extra_marker(name);
+    std::fs::write(dir.join(".gltree.toml"), config).unwrap();
+    dir
+}
+
+const BADGES: &str = "extra_keys = [\"marker\"]\n\n[[badges]]\nprefix = \"SP\"\nname = \"Spec\"\nextra = \"marker\"\nmissing = \"none yet\"\n";
+
+fn serve_in(dir: &Path, snapshot: &str) -> Served {
+    use std::io::BufRead;
+    let mut child = gltree_cmd(dir, &["serve", "--snapshot", snapshot, "--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let served = Served {
+        child,
+        base: line.trim_end().trim_end_matches('/').to_string(),
+    };
+    assert!(
+        line.starts_with("http://127.0.0.1:") && line.ends_with("/\n"),
+        "{line:?}"
+    );
+    served
+}
+
+fn http(method: &str, url: &str) -> (u16, String) {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut res = match method {
+        "POST" => agent.post(url).send_empty(),
+        _ => agent.get(url).call(),
+    }
+    .unwrap();
+    let status = res.status().as_u16();
+    (status, res.body_mut().read_to_string().unwrap())
+}
+
+fn json_of(method: &str, url: &str) -> (u16, serde_json::Value) {
+    let (status, body) = http(method, url);
+    (status, serde_json::from_str(&body).unwrap())
+}
+
+fn family_numbers(v: &serde_json::Value) -> Vec<u64> {
+    v["tree"]["roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["number"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
+    let dir = clone_with_config("serve-answers", BADGES);
+    let s = serve_in(&dir, &fixture_path());
+    let (status, page) = http("GET", &format!("{}/", s.base));
+    assert_eq!(status, 200);
+    assert!(page.contains("<title>gltree</title>"), "{page}");
+    let (status, v) = json_of("GET", &format!("{}/api/families", s.base));
+    assert_eq!(status, 200);
+    assert_eq!(
+        (v["version"].clone(), v["tree"]["version"].clone()),
+        (1.into(), 3.into())
+    );
+    assert_eq!(family_numbers(&v), [1, 7, 8, 12, 14, 15, 17]);
+    assert_eq!(
+        v["badges"],
+        serde_json::json!([{"prefix": "SP", "name": "Spec", "extra": "marker", "missing": "none yet"}])
+    );
+    let (status, t) = json_of("GET", &format!("{}/api/tree/3", s.base));
+    assert_eq!(status, 200);
+    assert_eq!(t["version"], 3);
+    assert_eq!(t["roots"][0]["number"], 3);
+    assert_eq!(
+        t["roots"][0]["children"][0]["extra"],
+        serde_json::json!({"marker": "K-1"})
+    );
+    let (status, e) = json_of("GET", &format!("{}/api/tree/42", s.base));
+    assert_eq!(status, 404);
+    assert!(e["error"].as_str().unwrap().contains("#42"), "{e}");
+}
+
+#[test]
+fn serve_refresh_reads_the_snapshot_file_again() {
+    let dir = clone_with_config("serve-refresh", "");
+    let snap = dir.join("t.json");
+    std::fs::copy(fixture_path(), &snap).unwrap();
+    let s = serve_in(&dir, "t.json");
+    let title = |v: &serde_json::Value| {
+        v["tree"]["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["number"] == 17)
+            .unwrap()["title"]
+            .clone()
+    };
+    let text = std::fs::read_to_string(&snap).unwrap();
+    assert!(text.contains("\"A finished feature\""));
+    std::fs::write(
+        &snap,
+        text.replace("\"A finished feature\"", "\"A renamed feature\""),
+    )
+    .unwrap();
+    let (_, before) = json_of("GET", &format!("{}/api/families", s.base));
+    assert_eq!(title(&before), "A finished feature");
+    let (status, after) = json_of("POST", &format!("{}/api/refresh", s.base));
+    assert_eq!(status, 200);
+    assert_eq!(title(&after), "A renamed feature");
+    let (_, kept) = json_of("GET", &format!("{}/api/families", s.base));
+    assert_eq!(title(&kept), "A renamed feature");
+}
+
+#[test]
+fn serve_does_not_listen_beyond_loopback() {
+    let dir = clone_with_config("serve-loopback", "");
+    let s = serve_in(&dir, &fixture_path());
+    let port: u16 = s.base.rsplit(':').next().unwrap().parse().unwrap();
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    probe
+        .connect("192.0.2.1:9")
+        .expect("this test needs a network address besides loopback");
+    let ip = probe.local_addr().unwrap().ip();
+    assert!(!ip.is_loopback() && !ip.is_unspecified(), "{ip}");
+    assert_eq!(http("GET", &format!("{}/api/families", s.base)).0, 200);
+    let outside = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::new(ip, port),
+        std::time::Duration::from_secs(3),
+    );
+    assert!(outside.is_err(), "{ip}:{port} answered");
+}
+
+fn serve_that_stops(dir: &Path, args: &[&str]) -> Output {
+    let mut child = gltree_cmd(dir, &["serve"])
+        .args(args)
+        .args(["--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(30) {
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "serve kept running: {}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn serve_refuses_a_badge_whose_extra_key_is_not_declared_and_prints_no_address() {
+    let dir = clone_with_config(
+        "serve-bad-badge",
+        "extra_keys = [\"marker\"]\n[[badges]]\nprefix = \"SP\"\nname = \"Spec\"\nextra = \"other\"\n",
+    );
+    let out = serve_that_stops(&dir, &["--snapshot", &fixture_path()]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("other") && err.contains("extra_keys"), "{err}");
+}
+
+#[test]
+fn serve_with_a_snapshot_it_cannot_read_stops_before_printing_an_address() {
+    let dir = clone_with_config("serve-no-snapshot", "");
+    let out = serve_that_stops(&dir, &["--snapshot", "none.json"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("none.json"));
 }

@@ -65,12 +65,13 @@ pub trait Tracker {
 
 /// An in-memory tracker for tests and for callers that already hold the items.
 /// Its links are each item's `links`; `levels` records every `level` call and `writes` every
-/// write, as text; `fail_links` makes `add_link` fail, `fail_unlinks` `remove_link`, and
-/// `fail_descs` every `set_desc` after the first that many succeed.
+/// write, as text; `fail_all_items` makes `all_items` fail, `fail_links` `add_link`,
+/// `fail_unlinks` `remove_link`, and `fail_descs` every `set_desc` after the first that many succeed.
 pub struct FakeTracker {
     pub items: RefCell<Vec<Item>>,
     pub levels: RefCell<Vec<Vec<u64>>>,
     pub writes: RefCell<Vec<String>>,
+    pub fail_all_items: Cell<bool>,
     pub fail_links: Cell<bool>,
     pub fail_unlinks: Cell<bool>,
     pub fail_descs: Cell<Option<usize>>,
@@ -82,6 +83,7 @@ impl FakeTracker {
             items: RefCell::new(items),
             levels: RefCell::new(vec![]),
             writes: RefCell::new(vec![]),
+            fail_all_items: Cell::new(false),
             fail_links: Cell::new(false),
             fail_unlinks: Cell::new(false),
             fail_descs: Cell::new(None),
@@ -95,6 +97,9 @@ impl FakeTracker {
 
 impl Tracker for FakeTracker {
     fn all_items(&self) -> Result<Vec<Item>, Error> {
+        if self.fail_all_items.get() {
+            return Err(Error::Server("a full read".into()));
+        }
         Ok(self.items.borrow().clone())
     }
 

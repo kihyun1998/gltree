@@ -68,11 +68,13 @@ the server one depth at a time.
 
 ## Cross-cutting invariants
 - [Every reference has a link](every-reference-has-a-link.md) — the walk sees only linked children.
+- [One rule for a finished family](one-rule-for-a-finished-family.md) — `with_open_work` has a copy in `serve`'s page.
 
 ## Blast radius
 - [reading-the-server](reading-the-server.md) — the walk's cost and correctness rest on `level`: 100 items a request, and an overflow of linked items is an error rather than a short tree.
 - [writing-the-tree](writing-the-tree.md) — `move` refuses a cycle through `subtree`; a walk that misses children lets a move under its own descendant through.
 - [the-command-line-contract](the-command-line-contract.md) — the text and `--json` are read by outside skills.
+- [serving-the-viewer](serving-the-viewer.md) — the page reads the JSON node and copies the finished-family rule (`with_open_work`) into its `finished`.
 
 ## Known holes / open
 - An item with more than 100 links cannot be walked; the error says to draw it from a snapshot.
