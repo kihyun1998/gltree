@@ -67,9 +67,25 @@ reasons below.
   filters list every family); choosing "All" brings it back (maintainer, 2026-11-19). A filter that
   matches no family says so in the list and the detail; "None" and "Nothing left to do" stay for an
   empty "All" list, where they are true (maintainer, 2026-11-19). A chosen filter is held by its
-  badge and value, not its place in the list, since the list is rebuilt on every render. Open
+  badge and value, not its place in the list, since the buttons are drawn again on every filter,
+  toggle and refresh. Open
   blockers show on every node, the root in the list and the detail included. Counting motion is off
   under reduced motion, as the CSS animations are.
+- **What each act draws** (maintainer, 2026-11-19: selecting a family must not stutter; a detail
+  drawn a second time when the walk's tree arrives plays its entrance and ring again). The first read
+  and a refresh draw the whole page (`paint`): the hero counts up, and the list and the detail enter.
+  A filter or the toggle draws the filter buttons and the list rows again (`relist`): the hero counts
+  every family, so neither changes it, and the highlight stays the same element and slides to the
+  selected row. A selected family the list keeps keeps its detail as it is, a stale note included,
+  and is not read again; a list that drops it selects its first family and draws it as `choose`
+  does, and an empty list draws its empty detail in place. Selecting a family slides the highlight
+  and draws the detail with its entrance and ring once (`choose`). The tree `/api/tree/N` brings
+  replaces the detail's contents in place (`draw`), keeping the detail element, so its entrance
+  carries on uninterrupted: a row still inside its 500 ms entrance (the CSS `inup`) is drawn with
+  its delay shortened by the time already passed, so it carries on from where it is, and the new ring
+  starts from the offset the old one showed. A tree whose markup is the same as what is shown changes
+  nothing. Clicking the selected family again reads `/api/tree/N` again and puts it in place
+  through `draw`, with no entrance (worker's judgement, 2026-11-19).
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
   `http:` or `https:` URL** (`safeUrl`); any other `url`, `null` included, renders the node
   without a link. `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them
@@ -101,5 +117,5 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
-- The page's behaviour (selection, filters, refresh states, escaping) has no test in the repository; it was checked with a throwaway Node harness and by reading (2026-11-19). The repository runs no JavaScript.
+- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19). The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).
