@@ -13,7 +13,7 @@ to one leaves the page and `tree` disagreeing about which families are done, wit
 
 ## Territories it holds in
 - [drawing-a-tree](drawing-a-tree.md) — `with_open_work`, called by `Command::Tree` without a number.
-- [serving-the-viewer](serving-the-viewer.md) — `finished` in the page, read by the "All" filter's test for the toggle: the "All" list and the families count (badge counts and badge filters span every family).
+- [serving-the-viewer](serving-the-viewer.md) — `finished` in the page, read by the "All" filter's test for the toggle: the "All" list only (every count on the page and every badge filter span every family).
 
 ## What a violation looks like
 A family `gltree tree` prints shows up as finished on the page, or the page's default view lists a

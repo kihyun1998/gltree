@@ -273,7 +273,8 @@ Starts a local web server on `127.0.0.1` only, reads the whole tracker once, the
 and serves a page until Ctrl+C. On the left are the families, as `gltree tree` with no number picks
 them (the finished ones behind a toggle), each with its progress and badges. A filter per badge
 value, and per badge's `missing`, lists every family that shows it, finished ones included, and
-the badge counts span every family too. On the right is the selected family's tree, read fresh
+every count above the list spans every family too. The toggle changes only the unfiltered list, and
+is dimmed while a badge filter is chosen. On the right is the selected family's tree, read fresh
 when it is selected, with every item linked to its page on the server. The refresh button reads the
 whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and

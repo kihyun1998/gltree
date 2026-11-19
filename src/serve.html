@@ -14,6 +14,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .switch i{width:34px;height:20px;border-radius:999px;background:var(--hair);position:relative;transition:background .3s}
 .switch i:after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .4s var(--spring)}
 .switch.on i{background:var(--accent)}.switch.on i:after{transform:translateX(14px)}
+.switch[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .refresh{display:flex;align-items:center;gap:8px;padding:7px 14px;border:1px solid var(--hair);border-radius:999px;background:var(--surface);font-size:13px;transition:transform .2s var(--ease),box-shadow .2s}
 .refresh:hover{box-shadow:0 2px 10px rgba(0,0,0,.06)}.refresh:active{transform:scale(.96)}
 .refresh svg{width:14px;height:14px}
@@ -91,11 +92,12 @@ function buildFilters(roots){filters=[{key:'all',label:'All',test:r=>showAll||!f
   vals.forEach(v=>filters.push({key:JSON.stringify([i,v]),label:b.name+': '+v,test:r=>marks(r).some(m=>m.b===b&&m.value===v)}));
   if(b.missing!=null)filters.push({key:JSON.stringify([i]),label:b.name+': '+b.missing,test:r=>marks(r).some(m=>m.b===b&&m.missing)})});
  if(!filters.some(f=>f.key===flt))flt='all'}
-function hero(roots,every){const open=roots.flatMap(r=>flat(r)).filter(x=>x.n.state==='open').length;
- const kpi=[[roots.length,'families'],[open,'open items']].concat(data.badges.filter(b=>b.missing!=null).map(b=>[every.filter(r=>marks(r).some(m=>m.b===b&&m.missing)).length,b.name+': '+b.missing]));
+function hero(every){const open=every.flatMap(r=>flat(r)).filter(x=>x.n.state==='open').length;
+ const kpi=[[every.length,'families'],[open,'open items']].concat(data.badges.filter(b=>b.missing!=null).map(b=>[every.filter(r=>marks(r).some(m=>m.b===b&&m.missing)).length,b.name+': '+b.missing]));
  return '<div class="hero in-up"><h2>Issue tree</h2><div class="kpi">'+kpi.map(([n,t])=>'<div><b data-roll="'+n+'">0</b><span>'+esc(t)+'</span></div>').join('')+'</div></div>'}
 function link(u,cls,inner,extra){const h=safeUrl(u);return h?'<a class="'+cls+'" href="'+esc(h)+'" target="_blank" rel="noopener noreferrer"'+(extra||'')+'>'+inner+'</a>':'<div class="'+cls+'"'+(extra||'')+'>'+inner+'</div>'}
-function detail(r,note){if(!r)return '<div class="detail swap" id="det"><div class="empty">Nothing left to do</div></div>';
+const none=done=>flt==='all'?done:'No family matches this filter';
+function detail(r,note){if(!r)return '<div class="detail swap" id="det"><div class="empty">'+none('Nothing left to do')+'</div></div>';
  const C=2*Math.PI*27,gl=safeUrl(r.url);
  return '<div class="detail swap" id="det"><div style="display:flex;gap:18px;align-items:center"><svg class="ring" viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="27"/><circle class="fg" cx="32" cy="32" r="27" stroke-dasharray="'+C+'" stroke-dashoffset="'+C+'" data-off="'+(C*(1-pct(r)/100))+'"/></svg><div style="flex:1"><span class="num">#'+esc(r.number)+' · '+esc(r.state)+'</span><h3>'+esc(r.title)+'</h3><span class="num">'+(r.total?esc(r.closed)+' / '+esc(r.total)+' descendants closed':'no descendants')+'</span>'+blk(r)+'</div>'+(gl?'<a class="open-gl" href="'+esc(gl)+'" target="_blank" rel="noopener noreferrer">Open in GitLab ↗</a>':'')+'</div>'
  +(r.labels.length?'<div class="chips">'+r.labels.map(l=>'<span class="chip">'+esc(l)+'</span>').join('')+'</div>':'')
@@ -103,16 +105,18 @@ function detail(r,note){if(!r)return '<div class="detail swap" id="det"><div cla
    return '<div class="fieldbox">'+chip(m)+(v!=null?'<div><div class="k">extra.'+esc(m.b.extra)+'</div><code>'+esc(text(v))+'</code></div>':m.missing?'<div class="num">Closed with no '+esc(m.b.prefix)+' label</div>':'')+'</div>'}).join('')
  +(note?'<div class="stale">'+esc(note)+'</div>':'')
  +'<div class="tree">'+flat(r).slice(1).map(({n,d},i)=>link(n.url,'node in-up',dot(n)+'<span class="num">#'+esc(n.number)+'</span>'+title(n)+blk(n)+n.labels.map(l=>'<span class="chip" style="margin-left:6px">'+esc(l)+'</span>').join('')+(safeUrl(n.url)?'<span class="go">↗</span>':''),' style="padding-left:'+(8+(d-1)*22)+'px;animation-delay:'+(i*40)+'ms"')).join('')+'</div></div>'}
-function view(){const every=data.tree.roots;buildFilters(every);const shown=every.filter(filters[0].test),roots=every.filter(filters.find(f=>f.key===flt).test);
+function view(){const every=data.tree.roots;buildFilters(every);const roots=every.filter(filters.find(f=>f.key===flt).test);
  if(!roots.find(r=>r.number===sel))sel=roots.length?roots[0].number:null;const r=roots.find(x=>x.number===sel);
- return hero(shown,every)+'<div class="split in-up"><div><div class="filters">'+filters.map((f,i)=>'<button data-f="'+i+'" class="'+(f.key===flt?'on':'')+'">'+esc(f.label)+(i?' '+every.filter(f.test).length:'')+'</button>').join('')+'</div><div class="list" id="lst"><span class="hl"></span>'
- +(roots.length?roots.map(x=>'<button class="li" data-s="'+esc(x.number)+'">'+dot(x)+'<span>'+title(x)+'<small>#'+esc(x.number)+(x.total?' · '+esc(x.closed)+'/'+esc(x.total):'')+blk(x)+'</small></span><span class="r"><span class="num">'+pct(x)+'%</span>'+marks(x).map(chip).join('')+'</span></button>').join(''):'<div class="empty">None</div>')+'</div></div>'+detail(cur&&r&&cur.number===r.number?cur:r)+'</div>'}
+ return hero(every)+'<div class="split in-up"><div><div class="filters">'+filters.map((f,i)=>'<button data-f="'+i+'" class="'+(f.key===flt?'on':'')+'">'+esc(f.label)+(i?' '+every.filter(f.test).length:'')+'</button>').join('')+'</div><div class="list" id="lst"><span class="hl"></span>'
+ +(roots.length?roots.map(x=>'<button class="li" data-s="'+esc(x.number)+'">'+dot(x)+'<span>'+title(x)+'<small>#'+esc(x.number)+(x.total?' · '+esc(x.closed)+'/'+esc(x.total):'')+blk(x)+'</small></span><span class="r"><span class="num">'+pct(x)+'%</span>'+marks(x).map(chip).join('')+'</span></button>').join(''):'<div class="empty">'+none('None')+'</div>')+'</div></div>'+detail(cur&&r&&cur.number===r.number?cur:r)+'</div>'}
 function roll(){const still=typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches;document.querySelectorAll('[data-roll]').forEach(el=>{const to=+el.dataset.roll,t0=performance.now();if(still){el.textContent=to;return}const f=t=>{const k=Math.min(1,(t-t0)/700);el.textContent=Math.round(to*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)})}
 function moveHl(){const l=$('#lst');if(!l)return;const b=l.querySelector('[data-s="'+sel+'"]'),h=l.querySelector('.hl');if(b){h.style.opacity=1;h.style.top=b.offsetTop+'px';h.style.height=b.offsetHeight+'px'}else h.style.opacity=0}
 function ring(){const c=$('.ring .fg');if(c)requestAnimationFrame(()=>requestAnimationFrame(()=>c.style.strokeDashoffset=c.dataset.off))}
 function fail(m){const e=$('#err');e.textContent=m;e.hidden=false}
 function stamp(){$('#at').textContent=data?'Read '+new Date(data.read_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):''}
-function render(){if(!data)return;const was=sel;$('#m').innerHTML=view();roll();moveHl();ring();stamp();if(sel!==null&&(sel!==was||!cur))fresh(sel)}
+function sync(){const s=$('#sw'),off=flt!=='all';s.classList.toggle('on',showAll);s.setAttribute('aria-checked',String(showAll));
+ s.setAttribute('aria-disabled',String(off));s.tabIndex=off?-1:0;s.title=off?'Badge filters list every family':''}
+function render(){if(!data)return;const was=sel;$('#m').innerHTML=view();sync();roll();moveHl();ring();stamp();if(sel!==null&&(sel!==was||!cur))fresh(sel)}
 async function call(method,path){const r=await fetch(path,{method});let v=null;try{v=await r.json()}catch(e){}
  if(!r.ok)throw new Error(v&&typeof v.error==='string'?v.error:'HTTP '+r.status);return v}
 const kept=n=>data.tree.roots.find(r=>r.number===n);
@@ -120,7 +124,7 @@ function showDetail(r,note){$('#det').outerHTML=detail(r,note);ring()}
 async function fresh(n){try{const v=await call('GET','/api/tree/'+n);if(sel===n&&v.roots[0]){cur=v.roots[0];showDetail(cur)}}
  catch(e){if(sel===n)showDetail(kept(n),'Showing the last full read: '+e.message)}}
 async function load(){try{data=await call('GET','/api/families');$('#err').hidden=true;render()}catch(e){$('#m').innerHTML='';fail('Cannot read the families: '+e.message)}}
-function toggle(){showAll=!showAll;$('#sw').classList.toggle('on',showAll);$('#sw').setAttribute('aria-checked',String(showAll));render()}
+function toggle(){if(flt!=='all')return;showAll=!showAll;sync();render()}
 $('#sw').onclick=toggle;$('#sw').onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle()}};
 $('#rf').onclick=async()=>{const b=$('#rf'),t=b.querySelector('span');if(b.classList.contains('busy'))return;b.classList.add('busy');t.textContent='Reading…';
  try{data=await call('POST','/api/refresh');cur=null;$('#err').hidden=true;b.classList.remove('busy');b.classList.add('ok');t.textContent='Up to date';render();setTimeout(()=>{b.classList.remove('ok');t.textContent='Refresh'},1400)}
