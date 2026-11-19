@@ -30,11 +30,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// The tree under an item with closed/all descendants per node; every root's tree without one
+    /// The tree under an item with closed/all descendants per node; without one, every root's tree that holds an open item
     Tree {
         /// The root item, as `N` or `#N`
         #[arg(value_parser = parse_iid)]
         root: Option<u64>,
+        /// Every root's tree, the ones whose every item is closed included
+        #[arg(long, conflicts_with = "root")]
+        all: bool,
         /// Read the tracker from a snapshot file instead of the server
         #[arg(long)]
         snapshot: Option<PathBuf>,
@@ -247,13 +250,22 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     match cli.command {
         Command::Tree {
             root,
+            all,
             snapshot,
             json,
         } => {
             let tracker = source(snapshot.clone())?;
             let nodes = match (snapshot, root) {
                 (None, Some(r)) => tree::live_tree(tracker.as_ref(), scheme.as_ref(), r)?,
-                _ => tree::tree(tracker.as_ref(), scheme.as_ref(), root)?,
+                (_, Some(_)) => tree::tree(tracker.as_ref(), scheme.as_ref(), root)?,
+                (_, None) => {
+                    let nodes = tree::tree(tracker.as_ref(), scheme.as_ref(), None)?;
+                    if all {
+                        nodes
+                    } else {
+                        tree::with_open_work(nodes)
+                    }
+                }
             };
             if json {
                 writeln!(

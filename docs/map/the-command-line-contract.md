@@ -14,6 +14,9 @@ implementation, which is why its output is what callers read; it does not decide
   error, and on a write left `Unfinished` (`main`, `run`).
 - **The source**: every read command takes `--snapshot F` instead of the server (`source`); `tree N`
   without it walks, `tree` without a number reads every item.
+- **`tree` without a number leaves out families whose every item is closed**; `--all` draws every
+  family and is a usage error (exit 2) beside a number. The JSON shape is unchanged, with fewer
+  `roots` by default; `tree N --json`, which outside skills read, is unchanged (#25).
 - **JSON shapes carry a version**, raised on any change a reader could notice: `tree` 2, `check` 1,
   `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1 (each module's `JSON_VERSION`,
   `NEW_JSON_VERSION`). The shapes are in the README and in each owning note.

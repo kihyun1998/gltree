@@ -14,5 +14,7 @@
  {"iid": 13, "gid": "gid://gitlab/WorkItem/13", "title": "The open follow-up", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nparent = 12\n+++\n", "labels": [], "links": [12], "created": "2026-01-09"},
  {"iid": 14, "gid": "gid://gitlab/WorkItem/14", "title": "A task whose parent line slipped down", "state": "open", "type": "task", "hparent": null, "hchildren": [], "desc": "+++\nparent = #1\n+++\n\nBody first", "labels": [], "links": [], "created": "2026-01-09"},
  {"iid": 15, "gid": "gid://gitlab/WorkItem/15", "title": "An open root whose work is all done", "state": "open", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nchildren = [16]\n+++\n", "labels": [], "links": [16], "created": "2026-01-09"},
- {"iid": 16, "gid": "gid://gitlab/WorkItem/16", "title": "The done child", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nparent = 15\n+++\n", "labels": [], "links": [15], "created": "2026-01-09"}
+ {"iid": 16, "gid": "gid://gitlab/WorkItem/16", "title": "The done child", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nparent = 15\n+++\n", "labels": [], "links": [15], "created": "2026-01-09"},
+ {"iid": 17, "gid": "gid://gitlab/WorkItem/17", "title": "A finished feature", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nchildren = [18]\n+++\n", "labels": [], "links": [18], "created": "2026-01-10"},
+ {"iid": 18, "gid": "gid://gitlab/WorkItem/18", "title": "Its finished slice", "state": "closed", "type": "issue", "hparent": null, "hchildren": [], "desc": "+++\nparent = 17\n+++\n", "labels": [], "links": [17], "created": "2026-01-10"}
 ]

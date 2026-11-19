@@ -1,7 +1,8 @@
 # Drawing a tree
 
 ## What it is
-`gltree tree`: the tree under an item, or every root's tree, as text or JSON, with closed/total
+`gltree tree`: the tree under an item, or every root's tree that holds an open item (every one with
+`--all`), as text or JSON, with closed/total
 descendants per node and open blockers — read from a snapshot, from the whole tracker, or by walking
 the server one depth at a time.
 
@@ -26,6 +27,12 @@ the server one depth at a time.
 - **Roots without a number**: an item with no `parent` **or** whose parent is not in the tracker, so a
   child of a deleted item is not lost (`draw`). [listing-roots](listing-roots.md) and the state policy
   count only the first kind; `check` reports the second as `missing-parent`.
+- **Finished families are left out without a number** (#25): after drawing and before rendering, a
+  root whose state is closed and whose `closed` equals its `total` is dropped with everything under
+  it (`with_open_work`, `Command::Tree`). The rule reads the drawn `Node`, so a cycle or a deleted
+  parent cannot make a family half visible, and `render`, `to_json` and the counts are unchanged.
+  `--all` turns it off and conflicts with a number; `tree N` always draws, so naming an item never
+  gives an empty answer. Nothing inside a family is filtered and nothing marks what was left out.
 - **A cycle ends where the path meets itself**: each node carries the items from the root down to it,
   not every item seen, so counts follow each path (`node`). This matched the Python tool's per-path
   counting (commit 2a78fa5, 2026-10-21).
@@ -34,15 +41,17 @@ the server one depth at a time.
 - **Goldens**: `tests/golden/tree-*.txt` for `tests/fixtures/tracker.json`, stored LF and pinned by
   `.gitattributes`; gltree prints LF everywhere. They were printed by the consumers' Python tool
   (commit 2a78fa5), which is deleted; a deliberate output change is reviewed and the goldens are
-  rewritten from gltree's own output (maintainer, 2026-11-19). The fixture moved to headers in #16
+  rewritten from gltree's own output (maintainer, 2026-11-19). `tree-all.txt` is the default
+  (finished families left out) and `tree--all.txt` is `tree --all`; fixture #17–#18 is the finished
+  family, #7 the lone closed root, #12 and #15 the families that stay (#25). The fixture moved to headers in #16
   and every tree golden stayed byte for byte (commit aa86291, 2026-10-22).
 - Input bound: a snapshot is read whole into memory; the walk is bounded by the tree.
 
 ## Code
-- `src/tree.rs — Node, tree, live_tree, states, blockers, open_blockers, subtree, draw, node, render, render_into, to_json, node_json, JSON_VERSION`
+- `src/tree.rs — Node, tree, live_tree, with_open_work, states, blockers, open_blockers, subtree, draw, node, render, render_into, to_json, node_json, JSON_VERSION`
 - `src/scheme.rs — RelationScheme, FrontMatter`
 - `src/main.rs — Command::Tree`
-- `tests/cli.rs`; `tests/golden/tree-1.txt, tree-3.txt, tree-9.txt, tree-all.txt`; `.gitattributes`
+- `tests/cli.rs`; `tests/golden/tree-1.txt, tree-3.txt, tree-9.txt, tree-all.txt, tree--all.txt`; `.gitattributes`
 
 ## Reference behaviour
 - The consumers' Python tree tool, byte for byte, until it was deleted (commit 2a78fa5; live on both

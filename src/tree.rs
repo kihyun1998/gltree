@@ -52,6 +52,14 @@ pub fn live_tree(
     draw(&items, &known, scheme, Some(root))
 }
 
+/// The trees that hold any open item; a tree whose root and every node under it are closed is left out.
+pub fn with_open_work(nodes: Vec<Node>) -> Vec<Node> {
+    nodes
+        .into_iter()
+        .filter(|n| n.state == State::Open || n.closed < n.total)
+        .collect()
+}
+
 /// Each item's state by number.
 pub fn states(items: &[Item]) -> HashMap<u64, State> {
     items.iter().map(|it| (it.iid, it.state)).collect()

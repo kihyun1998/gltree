@@ -1,5 +1,3 @@
-//! The binary against golden output the consumers' Python tree tool printed for the same snapshot.
-
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -48,10 +46,90 @@ fn tree_under_a_root_matches_the_python_tool_byte_for_byte() {
 }
 
 #[test]
-fn tree_of_every_root_matches_the_python_tool_byte_for_byte() {
+fn tree_of_every_root_leaves_out_the_families_whose_every_item_is_closed() {
     assert_eq!(
         tree_text(&["tree", "--snapshot", FIXTURE]),
         golden("tree-all.txt")
+    );
+}
+
+#[test]
+fn tree_all_draws_every_family() {
+    assert_eq!(
+        tree_text(&["tree", "--all", "--snapshot", FIXTURE]),
+        golden("tree--all.txt")
+    );
+}
+
+#[test]
+fn tree_under_a_finished_root_still_draws_it() {
+    assert_eq!(
+        tree_text(&["tree", "17", "--snapshot", FIXTURE]),
+        "#17 [closed] A finished feature  1/1\n  #18 [closed] Its finished slice\n"
+    );
+    assert_eq!(
+        tree_text(&["tree", "7", "--snapshot", FIXTURE]),
+        "#7 [closed] A lone piece of work\n"
+    );
+}
+
+#[test]
+fn all_with_a_root_number_is_a_usage_error() {
+    let out = gltree(&["tree", "17", "--all", "--snapshot", FIXTURE]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("cannot be used with"), "{err}");
+}
+
+#[test]
+fn json_leaves_out_the_same_families_and_all_brings_them_back() {
+    let roots = |args: &[&str]| -> Vec<u64> {
+        let v: serde_json::Value = serde_json::from_str(&tree_text(args)).unwrap();
+        assert_eq!(v["version"], 2);
+        v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["number"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(
+        roots(&["tree", "--snapshot", FIXTURE, "--json"]),
+        [1, 8, 12, 14, 15]
+    );
+    assert_eq!(
+        roots(&["tree", "--all", "--snapshot", FIXTURE, "--json"]),
+        [1, 7, 8, 12, 14, 15, 17]
+    );
+}
+
+#[test]
+fn a_tracker_of_only_finished_families_draws_nothing_and_exits_0() {
+    let dir = outside_a_clone("tree-all-finished");
+    std::fs::write(
+        dir.join("t.json"),
+        r#"[{"iid": 1, "title": "a", "state": "closed", "desc": "+++\nchildren = [2]\n+++\n", "links": [2]},
+            {"iid": 2, "title": "b", "state": "closed", "desc": "+++\nparent = 1\n+++\n", "links": [1]},
+            {"iid": 3, "title": "c", "state": "closed", "desc": "+++\nparent = 99\n+++\n", "links": []}]"#,
+    )
+    .unwrap();
+    let out = gltree_in(&dir, &["tree", "--snapshot", "t.json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let all = gltree_in(&dir, &["tree", "--all", "--snapshot", "t.json"]);
+    assert_eq!(
+        String::from_utf8(all.stdout).unwrap(),
+        "#1 [closed] a  1/1\n  #2 [closed] b\n#3 [closed] c\n"
     );
 }
 
@@ -348,7 +426,7 @@ fn roots_lists_only_items_without_a_parent_line_with_the_filters() {
     let all = tree_text(&["roots", "--snapshot", FIXTURE]);
     let numbers: Vec<&str> = all.lines().map(|l| l.split(' ').next().unwrap()).collect();
     // #8 names a deleted parent and #14's Parent line is not its first line: only the first is a root
-    assert_eq!(numbers, ["#1", "#7", "#12", "#14", "#15"]);
+    assert_eq!(numbers, ["#1", "#7", "#12", "#14", "#15", "#17"]);
     let spec = tree_text(&[
         "roots",
         "--closed",
