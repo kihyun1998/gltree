@@ -2,6 +2,7 @@
 //! native-tls. The agent is built here only on macOS; every other platform keeps native-tls in
 //! `gitlab.rs`. Territory: `docs/map/reading-the-server.md`.
 
+use crate::gitlab::{TRACKER, ca_name};
 use crate::tracker::Error;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -30,7 +31,7 @@ pub fn agent(config: Config, pem: &[u8], path: &Path) -> Result<Agent, Error> {
     let algs = provider.signature_verification_algorithms;
     let client = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|e| Error::Source(format!("rustls: {e}")))?
+        .map_err(|e| Error::unreadable(TRACKER, format!("rustls: {e}")))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedVerifier { cas, algs }))
         .with_no_client_auth();
@@ -49,15 +50,14 @@ pub fn agent(config: Config, pem: &[u8], path: &Path) -> Result<Agent, Error> {
 fn parse_ca_ders(pem: &[u8], path: &Path) -> Result<Vec<CertificateDer<'static>>, Error> {
     let mut ders = Vec::new();
     for item in x509_parser::pem::Pem::iter_from_buffer(pem) {
-        let item =
-            item.map_err(|e| Error::Source(format!("CA certificate {}: {e}", path.display())))?;
+        let item = item.map_err(|e| Error::malformed(ca_name(path), e.to_string()))?;
         ders.push(CertificateDer::from(item.contents));
     }
     if ders.is_empty() {
-        return Err(Error::Source(format!(
-            "no PEM certificate in {}",
-            path.display()
-        )));
+        return Err(Error::malformed(
+            ca_name(path),
+            "it holds no PEM certificate",
+        ));
     }
     Ok(ders)
 }

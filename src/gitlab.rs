@@ -15,6 +15,11 @@ use ureq::tls::{PemItem, RootCerts, TlsConfig, TlsProvider, parse_pem};
 pub const LEVEL_BATCH: usize = 100;
 
 const ANSWER: &str = "the server's answer";
+pub(crate) const TRACKER: &str = "the tracker";
+
+pub(crate) fn ca_name(path: &std::path::Path) -> String {
+    format!("the CA certificate {}", path.display())
+}
 
 pub struct GitLab {
     agent: Agent,
@@ -28,9 +33,8 @@ impl GitLab {
         let agent: Agent = match &login.ca_cert {
             None => config.build().into(),
             Some(path) => {
-                let pem = std::fs::read(path).map_err(|e| {
-                    Error::Source(format!("CA certificate {}: {e}", path.display()))
-                })?;
+                let pem = std::fs::read(path)
+                    .map_err(|e| Error::unreadable(ca_name(path), e.to_string()))?;
 
                 #[cfg(target_os = "macos")]
                 let agent = crate::macos_tls::agent(config.build(), &pem, path)?;
@@ -44,10 +48,10 @@ impl GitLab {
                         })
                         .collect();
                     if certs.is_empty() {
-                        return Err(Error::Source(format!(
-                            "no PEM certificate in {}",
-                            path.display()
-                        )));
+                        return Err(Error::malformed(
+                            ca_name(path),
+                            "it holds no PEM certificate",
+                        ));
                     }
                     config
                         .tls_config(
@@ -122,14 +126,14 @@ impl GitLab {
                 .header("Content-Type", "application/json")
                 .send(&json[..]),
         };
-        let mut resp = sent.map_err(|e| Error::Source(format!("{url}: {e}")))?;
+        let mut resp = sent.map_err(|e| Error::unreadable(TRACKER, format!("{url}: {e}")))?;
         let status = resp.status().as_u16();
         let bytes = resp
             .body_mut()
             .with_config()
             .limit(u64::MAX)
             .read_to_vec()
-            .map_err(|e| Error::Source(format!("{url}: {e}")))?;
+            .map_err(|e| Error::unreadable(TRACKER, format!("{url}: {e}")))?;
         Ok((status, bytes))
     }
 }
@@ -206,8 +210,8 @@ pub fn link_id(status: u16, body: &[u8], other: u64) -> Result<Option<u64>, Erro
     if !(200..300).contains(&status) {
         return Err(Error::Server(format!("HTTP {status} reading links")));
     }
-    let v: Value =
-        serde_json::from_slice(body).map_err(|e| Error::Server(format!("a links answer: {e}")))?;
+    let v: Value = serde_json::from_slice(body)
+        .map_err(|e| Error::malformed(ANSWER, format!("the links are not JSON: {e}")))?;
     Ok(v.as_array()
         .into_iter()
         .flatten()
@@ -227,7 +231,7 @@ pub fn encode_path(path: &str) -> String {
         .collect()
 }
 
-/// The item a create answered with, or the server's refusal.
+/// The item a create answered with, the server's refusal, or an answer gltree cannot read.
 pub fn created(status: u16, body: &[u8]) -> Result<Created, Error> {
     let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     if !(200..300).contains(&status) {
@@ -238,7 +242,7 @@ pub fn created(status: u16, body: &[u8]) -> Result<Created, Error> {
     }
     let iid = v["iid"]
         .as_u64()
-        .ok_or_else(|| Error::Server(format!("a created issue without iid: {v}")))?;
+        .ok_or_else(|| Error::malformed(ANSWER, format!("a created issue without iid: {v}")))?;
     Ok(Created {
         iid,
         url: v["web_url"].as_str().unwrap_or_default().into(),
@@ -275,13 +279,15 @@ pub fn level_query(project: &str, iids: &[u64]) -> String {
     )
 }
 
-/// A GraphQL answer's `data`, or the server's own error.
+/// A GraphQL answer's `data`, the server's own error, or an answer gltree cannot read.
 pub fn answer(status: u16, body: &[u8]) -> Result<Value, Error> {
     let v: Value = serde_json::from_slice(body).map_err(|_| {
-        Error::Server(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&body[..body.len().min(200)])
-        ))
+        let head = String::from_utf8_lossy(&body[..body.len().min(200)]);
+        if (200..300).contains(&status) {
+            Error::malformed(ANSWER, format!("HTTP {status}, not JSON: {head}"))
+        } else {
+            Error::Server(format!("HTTP {status}: {head}"))
+        }
     })?;
     if let Some(errs) = v
         .get("errors")
@@ -303,8 +309,9 @@ pub fn answer(status: u16, body: &[u8]) -> Result<Value, Error> {
         return Err(Error::Server(format!("HTTP {status} {msg}")));
     }
     v.get("data")
+        .filter(|d| !d.is_null())
         .cloned()
-        .ok_or_else(|| Error::Server("an answer without data".into()))
+        .ok_or_else(|| Error::malformed(ANSWER, "an answer without data"))
 }
 
 /// The items of a level answer, each with its linked items.
@@ -313,7 +320,10 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
         .pointer("/project/workItems/nodes")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            Error::Source("the project is not on the server, or this token cannot see it".into())
+            Error::unreadable(
+                TRACKER,
+                "the project is not on the server, or this token cannot see it",
+            )
         })?;
     let mut out = HashMap::new();
     for n in nodes {
@@ -330,10 +340,13 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
             .and_then(Value::as_bool)
             == Some(true)
         {
-            return Err(Error::Source(format!(
-                "#{} has more than 100 links; draw it from a snapshot instead",
-                item.iid
-            )));
+            return Err(Error::unreadable(
+                TRACKER,
+                format!(
+                    "#{} has more than 100 links; draw it from a snapshot instead",
+                    item.iid
+                ),
+            ));
         }
         let linked = links["nodes"]
             .as_array()
@@ -542,7 +555,10 @@ pub fn read_item_with_comments(
 /// The items of a page with their type, labels and link ends, and the cursor of the next page.
 pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
     let wi = data.pointer("/project/workItems").ok_or_else(|| {
-        Error::Source("the project is not on the server, or this token cannot see it".into())
+        Error::unreadable(
+            TRACKER,
+            "the project is not on the server, or this token cannot see it",
+        )
     })?;
     let mut items = Vec::new();
     for n in wi["nodes"].as_array().into_iter().flatten() {
@@ -560,10 +576,13 @@ pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
             .and_then(Value::as_bool)
             == Some(true)
         {
-            return Err(Error::Source(format!(
-                "#{} has more than 100 links; check cannot see them all",
-                item.iid
-            )));
+            return Err(Error::unreadable(
+                TRACKER,
+                format!(
+                    "#{} has more than 100 links; check cannot see them all",
+                    item.iid
+                ),
+            ));
         }
         item.links = Some(
             links
@@ -614,9 +633,10 @@ fn brief(n: &Value) -> Result<Item, Error> {
         .iter()
         .any(|l| l.pointer("/pageInfo/hasNextPage").and_then(Value::as_bool) == Some(true))
     {
-        return Err(Error::Source(format!(
-            "#{iid} has more than 100 labels; gltree cannot read them all"
-        )));
+        return Err(Error::unreadable(
+            TRACKER,
+            format!("#{iid} has more than 100 labels; gltree cannot read them all"),
+        ));
     }
     item.labels = labels
         .iter()
@@ -1128,7 +1148,7 @@ mod tests {
 
     fn names_too_many_labels(got: Result<impl std::fmt::Debug, Error>, iid: u64) {
         match got {
-            Err(Error::Source(m)) => assert!(
+            Err(Error::Source { what, why: m }) if what == TRACKER => assert!(
                 m.starts_with(&format!("#{iid} has more than 100 labels")),
                 "{m}"
             ),
@@ -1256,15 +1276,74 @@ mod tests {
     #[test]
     fn more_links_than_one_page_is_an_error_not_a_short_tree() {
         let r = parse_level(&level_answer(vec![wi(3, "OPEN", "", Some((vec![], true)))]));
-        assert!(matches!(r, Err(Error::Source(m)) if m.contains("#3")));
+        assert!(matches!(r, Err(Error::Source { why, .. }) if why.contains("#3")));
     }
 
     #[test]
     fn an_unknown_project_is_reported() {
         assert!(matches!(
             parse_level(&json!({ "project": null })),
-            Err(Error::Source(_))
+            Err(Error::Source { .. })
         ));
+    }
+
+    fn ca_error(name: &str, pem: Option<&[u8]>) -> (std::path::PathBuf, String) {
+        let path = std::env::temp_dir().join(format!("gltree-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        if let Some(pem) = pem {
+            std::fs::write(&path, pem).unwrap();
+        }
+        let login = Login {
+            api_base: "https://gitlab.example.com".into(),
+            token: "t".into(),
+            ca_cert: Some(path.clone()),
+        };
+        let m = GitLab::new(login, "team/app").err().unwrap().to_string();
+        let _ = std::fs::remove_file(&path);
+        (path, m)
+    }
+
+    #[test]
+    fn a_ca_certificate_that_cannot_be_read_is_reported_as_that_certificate() {
+        let (path, m) = ca_error("no-such-ca.pem", None);
+        assert!(
+            m.starts_with(&format!(
+                "cannot read the CA certificate {}: ",
+                path.display()
+            )),
+            "{m}"
+        );
+        assert!(!m.contains("cannot read the tracker"), "{m}");
+    }
+
+    #[test]
+    fn a_ca_certificate_without_a_pem_certificate_is_malformed() {
+        let (path, m) = ca_error("not-a-ca.pem", Some(b"not a certificate"));
+        assert_eq!(
+            m,
+            format!(
+                "the CA certificate {} is malformed: it holds no PEM certificate",
+                path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn an_answer_gltree_cannot_read_is_malformed_not_a_refusal() {
+        let unreadable = [
+            link_id(200, b"<html>", 9).map(|_| ()),
+            created(201, b"{}").map(|_| ()),
+            answer(200, b"<html>").map(|_| ()),
+            answer(200, b"{}").map(|_| ()),
+            answer(200, br#"{"data":null}"#).map(|_| ()),
+        ];
+        for got in unreadable {
+            let m = got.unwrap_err().to_string();
+            assert!(m.starts_with("the server's answer is malformed: "), "{m}");
+            assert!(!m.contains("refused"), "{m}");
+        }
+        let m = answer(502, b"<html>").unwrap_err().to_string();
+        assert!(m.starts_with("the server refused: HTTP 502"), "{m}");
     }
 
     #[test]

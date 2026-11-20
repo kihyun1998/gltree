@@ -34,7 +34,7 @@ implementation, which is why its output is what callers read; it does not decide
   `edit --set-extra`.
 
 ## Code
-- `src/main.rs — Cli, Command, parse_iid, parse_extra, server, source, main, run`
+- `src/main.rs — Cli, Command, parse_iid, parse_extra, unreadable_dir, current_dir, server, source, main, run`
 - `tests/cli.rs`
 - `README.md` (the user-facing shapes)
 
@@ -42,7 +42,7 @@ implementation, which is why its output is what callers read; it does not decide
 **None.**
 
 ## Cross-cutting invariants
-**None.**
+- [An error names what it read](an-error-names-what-it-read.md) — `current_dir` names the current directory when it cannot be read.
 
 ## Blast radius
 - [listing-roots](listing-roots.md) — `extra`, the label filters and the date filters are read outside; renaming one breaks a caller with no test here failing.

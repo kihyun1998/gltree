@@ -80,9 +80,12 @@ pub fn login(
     let token = set(env(TOKEN_ENV))
         .or_else(|| set(entry.and_then(|h| h.token.clone())))
         .ok_or_else(|| {
-            Error::Source(format!(
-                "no token for {host}: glab's config file holds none (glab may keep it in the OS keyring); set {TOKEN_ENV}"
-            ))
+            Error::unreadable(
+                "the glab login",
+                format!(
+                    "no token for {host}: glab's config file holds none (glab may keep it in the OS keyring); set {TOKEN_ENV}"
+                ),
+            )
         })?;
     let protocol =
         set(entry.and_then(|h| h.api_protocol.clone())).unwrap_or_else(|| "https".into());
@@ -119,6 +122,18 @@ hosts:
 
     fn none(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn a_missing_token_is_reported_as_the_glab_login() {
+        let m = login(None, "gitlab.example.com", &none)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            m.starts_with("cannot read the glab login: no token for gitlab.example.com"),
+            "{m}"
+        );
+        assert!(!m.contains("cannot read the tracker"), "{m}");
     }
 
     #[test]

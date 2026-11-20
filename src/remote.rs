@@ -39,26 +39,52 @@ impl Remote {
     }
 
     pub fn of_clone(dir: &Path) -> Result<Remote, Error> {
+        const ORIGIN: &str = "git's `origin` remote";
         let out = Command::new("git")
             .args(["remote", "get-url", "origin"])
             .current_dir(dir)
             .output()
-            .map_err(|e| Error::Source(format!("cannot run git: {e}")))?;
+            .map_err(|e| Error::unreadable(ORIGIN, format!("git did not start: {e}")))?;
         if !out.status.success() {
-            return Err(Error::Source(
-                "no `origin` remote here; run gltree inside a clone of the tracker's project"
-                    .into(),
+            return Err(Error::unreadable(
+                ORIGIN,
+                "there is none here; run gltree inside a clone of the tracker's project",
             ));
         }
         let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Remote::parse(&url)
-            .ok_or_else(|| Error::Source(format!("cannot read the remote URL `{url}`")))
+        Remote::parse(&url).ok_or_else(|| {
+            Error::malformed(ORIGIN, format!("`{url}` names no host and project path"))
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Remote;
+
+    #[test]
+    fn an_origin_that_names_no_project_is_malformed() {
+        let dir = std::env::temp_dir().join(format!("gltree-{}-bad-origin", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "notaurl"]);
+        let m = Remote::of_clone(&dir).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            m,
+            "git's `origin` remote is malformed: `notaurl` names no host and project path"
+        );
+    }
 
     fn r(host: &str, path: &str) -> Option<Remote> {
         Some(Remote {

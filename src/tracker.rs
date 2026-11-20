@@ -7,8 +7,13 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum Error {
-    /// Reading the source failed (a file, a missing login, the network).
-    Source(String),
+    /// Something gltree reads could not be read: `what` names that thing (the tracker, the glab
+    /// login, a CA certificate, git's `origin` remote, the snapshot file, the current directory),
+    /// `why` says why.
+    Source {
+        what: String,
+        why: String,
+    },
     /// Something gltree read is not in the shape it reads: `what` names that thing (the snapshot
     /// file, the glab config, the server's answer, an item's description), `why` says how.
     Malformed {
@@ -27,7 +32,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Source(m) => write!(f, "cannot read the tracker: {m}"),
+            Error::Source { what, why } => write!(f, "cannot read {what}: {why}"),
             Error::Malformed { what, why } => write!(f, "{what} is malformed: {why}"),
             Error::Server(m) => write!(f, "the server refused: {m}"),
             Error::NotFound(n) => write!(f, "#{n} is not in the tracker"),
@@ -38,6 +43,13 @@ impl fmt::Display for Error {
 }
 
 impl Error {
+    pub fn unreadable(what: impl Into<String>, why: impl Into<String>) -> Self {
+        Error::Source {
+            what: what.into(),
+            why: why.into(),
+        }
+    }
+
     pub fn malformed(what: impl Into<String>, why: impl Into<String>) -> Self {
         Error::Malformed {
             what: what.into(),

@@ -1,9 +1,10 @@
 # An error names what it read
 
 ## The fact
-An error about something gltree read names that thing: the snapshot file, the glab config, the
-server's answer, an item's description, the repo config. No error borrows another source's name, so
-the person reading `gltree: …` knows which file or answer to open.
+An error about something gltree read, or could not read, names that thing: the snapshot file, the
+glab config and the glab login, a CA certificate, git's `origin` remote, the current directory, the
+tracker, the server's answer, an item's description, the repo config. No error borrows another
+source's name, so the person reading `gltree: …` knows which file or answer to open.
 
 ## Why it is cross-cutting
 `tracker::Error` is shared by every adapter and by the core, and the sites that build one do not see
@@ -19,25 +20,58 @@ leaving the whole text to each site, because a name left to each site is how the
 reached the others. `what` is a `String` since `migrate::plan` names the item number (reading,
 2026-11-20).
 
+`Error::Source` has the same shape for the same reason: `{ what, why }`, printed
+`cannot read <what>: <why>`, built by `Error::unreadable(what, why)`. It used to print
+`cannot read the tracker: …` at every site, so a missing glab token, a CA file that would not open
+and a directory outside a clone all read as the tracker; `server` and `run` passed
+`current_dir`'s error bare, which named nothing (measured with `login(None, …)` and the CLI outside a
+clone, 2026-11-20). Copying `Malformed`'s shape is a derivation from the same argument, not a
+separate judgement: a `what` beside the reason rather than a variant per source, because nothing
+tells the sources apart after construction. The two split as their names say: a file or answer that
+could not be opened or reached is `Source`; one that was read and is not in the shape gltree reads
+is `Malformed`, so a CA file with no PEM certificate and an `origin` URL with no project path are
+`Malformed`.
+
+A server answer is judged by what it is, not by who sent it: GraphQL `errors` and a non-2xx status are
+the server refusing, `Error::Server`, printed `the server refused: …`; a 2xx answer gltree cannot read
+(not JSON, no `data` or a null one, links that are not JSON, a created issue without `iid`) is
+`Error::malformed(ANSWER, …)`. A non-2xx body that is not JSON stays a refusal, since the status
+already says the server refused (`answer`, tested with a 502 HTML body).
+
 ## Territories it holds in
-- [keeping-a-snapshot](keeping-a-snapshot.md) — `SnapshotFile::parse`: `the snapshot file is malformed: …`; a file that cannot be read is `Error::Source` naming its path (`Tracker for SnapshotFile`).
-- [reading-the-server](reading-the-server.md) — `login`: `the glab config is malformed: …`; `parse_comments`, `all_comments` and `brief`: `the server's answer is malformed: …` (`ANSWER` in `src/gitlab.rs`), the reason naming the item or the field missing.
+- [keeping-a-snapshot](keeping-a-snapshot.md) — `SnapshotFile::parse`: `the snapshot file is malformed: …`; a file that cannot be read is `cannot read the snapshot file <path>: …` (`Tracker for SnapshotFile`).
+- [reading-the-server](reading-the-server.md) — `login`: `the glab config is malformed: …` and `cannot read the glab login: no token …`; `GitLab::new` and `macos_tls`: `cannot read the CA certificate <path>: …` for a file that will not open, `the CA certificate <path> is malformed: …` for one with no PEM certificate (`ca_name` in `src/gitlab.rs` builds the name for both files); `Remote::of_clone`: ``cannot read git's `origin` remote: …`` when git fails, ``git's `origin` remote is malformed: …`` for a URL with no project path; `call`, `parse_level`, `parse_page`, `brief` and `macos_tls::agent`: `cannot read the tracker: …` (`TRACKER` in `src/gitlab.rs`) for the network, a project the token cannot see, a connection longer than one page, and a rustls setup failure; `parse_comments`, `all_comments`, `brief`, `link_id`, `created` and `answer`: `the server's answer is malformed: …` (`ANSWER`), the reason naming the item or the field missing.
+- [the-command-line-contract](the-command-line-contract.md) — `current_dir` in `src/main.rs`: `cannot read the current directory: …`, for `server` and `run`.
 - [migrating-a-tracker](migrating-a-tracker.md) — `plan`: `#N's description is malformed: …` when `header::with_header` refuses the body under an old head.
 - [reading-the-repo-config](reading-the-repo-config.md) — the config has its own `config::Error`, printed `.gltree.toml: <reason>`.
 
 ## What a violation looks like
 `gltree: not a tracker snapshot: glab config: …` from a command given no snapshot; a malformed server
-answer that sends the reader to a snapshot file they never named.
+answer that sends the reader to a snapshot file they never named; `cannot read the tracker: no token for …`
+for a login gltree never reached the tracker with.
 
 ## Discovery history
 - Commit c80e895 (#29, 2026-11-20): the repo config got its own error type.
 - #29 follow-up (2026-11-20): `Malformed` took `what`, and this note was written as one fact across the sites.
+- #29 second follow-up (2026-11-20): `Source` took `what` too, `main` names the current directory, and the three unreadable answer sites became `Malformed`.
 
 ## Where it will recur
-A new `Error::malformed` site names what it read in `what`. A new file or answer gltree reads takes a
+A new `Error::malformed` or `Error::unreadable` site names what it read in `what`; an answer is a refusal only when the server says so. A new file or answer gltree reads takes a
 name of its own, never one already used for another source; a new kind of input outside the tracker
 takes its own error type, as `config::Error` does.
 
 ## Known holes / open
-- Three answer sites in `src/gitlab.rs` build `Error::Server` for an answer they cannot read, so it prints `the server refused: …`: `link_id` (a links answer that is not JSON), `created` (a created issue without `iid`) and `answer` (a body that is not JSON, an answer without `data`). They name the server but call a malformed answer a refusal (measured with a probe test calling each, 2026-11-20). Not changed here.
-- `Error::Source` prints `cannot read the tracker: <m>`, the site's message naming the path, URL or tool, including at sites that read something on the way to the tracker (the glab login, a CA certificate, git). `server` and `run` in `src/main.rs` pass `current_dir`'s error bare, which names nothing (reading, 2026-11-20). Not changed here.
+- An existing glab config gltree cannot read (a directory, not UTF-8, no permission) is skipped by
+  `server` in `src/main.rs` (`read_to_string(p).ok()`), so the error is
+  `cannot read the glab login: no token for <host>: glab's config file holds none …`, the same text as
+  when no config exists; `config.rs` treats only `NotFound` as absent (reproduced with a directory
+  and a `\xff\xfe` file as `config.yml`, 2026-11-20). Not changed here.
+- `Remote::of_clone` reports every failing `git remote get-url origin` as "there is none here" and
+  drops git's stderr, so a broken `.git/config` on a clone with an origin reads as no origin
+  (reproduced, 2026-11-20). Not changed here.
+- A write that fails on the network prints `cannot read the tracker: …`: the source is right, the
+  verb is not (`call` serves reads and writes). `set_desc` reuses `created`, so a 2xx PUT without
+  `iid` says "a created issue". `--body-file` that cannot be read prints `gltree: <path>: …`, named
+  by its path but not in the `cannot read …` shape (`src/main.rs`). Not changed here.
+- The macOS sites in `src/macos_tls.rs` are not compiled on Windows, and only the release workflow
+  builds macOS (`.github/workflows/release.yml`, build only, no tests); they were checked by reading.

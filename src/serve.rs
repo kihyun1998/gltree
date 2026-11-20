@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn a_failed_read_is_a_502_with_the_reason() {
-        let open: Open = Box::new(|| Err(Error::Source("no login for host".into())));
+        let open: Open = Box::new(|| Err(Error::unreadable("the glab login", "no login for host")));
         let a = App::new(open, true, RepoConfig::defaults(), 7420);
         for (method, path) in [("POST", "/api/refresh"), ("GET", "/api/tree/1")] {
             let r = a.handle(&get(method, path));
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn on_port_80_a_host_without_a_port_is_ours_and_case_does_not_matter() {
-        let open: Open = Box::new(|| Err(Error::Source("unused".into())));
+        let open: Open = Box::new(|| Err(Error::unreadable("the tracker", "unused")));
         let a = App::new(open, false, RepoConfig::defaults(), 80);
         for host in ["127.0.0.1", "localhost", "127.0.0.1:80", "LOCALHOST"] {
             let r = a.handle(&Request {

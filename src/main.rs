@@ -219,9 +219,17 @@ fn parse_iid(s: &str) -> Result<u64, String> {
         .map_err(|_| format!("not an item number: {s}"))
 }
 
+fn unreadable_dir(e: std::io::Error) -> TrackerError {
+    TrackerError::unreadable("the current directory", e.to_string())
+}
+
+fn current_dir() -> Result<PathBuf, TrackerError> {
+    std::env::current_dir().map_err(unreadable_dir)
+}
+
 /// The tracker of the clone gltree runs in, through the user's glab login.
 fn server() -> Result<GitLab, TrackerError> {
-    let dir = std::env::current_dir().map_err(|e| TrackerError::Source(e.to_string()))?;
+    let dir = current_dir()?;
     let remote = Remote::of_clone(&dir)?;
     let env = |k: &str| std::env::var(k).ok();
     let yaml = login::glab_config_paths(&env, std::env::home_dir())
@@ -250,7 +258,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let config = RepoConfig::of_clone(&std::env::current_dir()?)?;
+    let config = RepoConfig::of_clone(&current_dir()?)?;
     let scheme = config.scheme();
     let policy = config.policy();
     let rules = write::Rules {
@@ -575,5 +583,14 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             writeln!(out, "{} items -> {}", items.len(), path.display())?;
             Ok(ExitCode::SUCCESS)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_current_directory_that_cannot_be_read_is_named() {
+        let m = super::unreadable_dir(std::io::Error::other("gone")).to_string();
+        assert_eq!(m, "cannot read the current directory: gone");
     }
 }

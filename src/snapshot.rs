@@ -80,8 +80,12 @@ pub fn replace_file(
 
 impl Tracker for SnapshotFile {
     fn all_items(&self) -> Result<Vec<Item>, Error> {
-        let bytes = std::fs::read(&self.path)
-            .map_err(|e| Error::Source(format!("{}: {e}", self.path.display())))?;
+        let bytes = std::fs::read(&self.path).map_err(|e| {
+            Error::unreadable(
+                format!("the snapshot file {}", self.path.display()),
+                e.to_string(),
+            )
+        })?;
         Self::parse(&bytes)
     }
 
@@ -125,6 +129,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_snapshot_that_cannot_be_read_is_reported_as_the_snapshot_file() {
+        use crate::tracker::Tracker;
+        let path = std::env::temp_dir().join(format!(
+            "gltree-{}-no-such-snapshot.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let m = SnapshotFile { path: path.clone() }
+            .all_items()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            m.starts_with(&format!(
+                "cannot read the snapshot file {}: ",
+                path.display()
+            )),
+            "{m}"
+        );
+        assert!(!m.contains("cannot read the tracker"), "{m}");
     }
 
     fn names(dir: &Path) -> Vec<String> {

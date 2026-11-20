@@ -40,10 +40,12 @@ the walk this adapter serves, not the adapter.
   used when `first` is left out, is not verified.
 - **Writes** are REST under `api/v4/projects/<url-encoded path>`: `POST issues`, `PUT issues/:iid`,
   `POST issues/:a/links` with `relates_to` (409, already linked, is success), and for an unlink the
-  link id from `GET issues/:a/links` then `DELETE` (no link is success). A create is judged by its
-  status, never by whether the body carries an `iid` (`created`, `linked`, `link_id`).
+  link id from `GET issues/:a/links` then `DELETE` (no link is success). A create is refused by its
+  status, never by whether the body carries an `iid`; a 2xx body without one is a malformed answer
+  (`created`, `linked`, `link_id`).
 - **Errors** the server returns — GraphQL `errors` (complexity, rate limit), a non-2xx status — are
-  `Error::Server`; every error exits 2. ureq's body size limit is lifted, since a level of 100 items
+  `Error::Server`; a 2xx answer gltree cannot read is `Error::Malformed` naming the server's answer;
+  every error exits 2. ureq's body size limit is lifted, since a level of 100 items
   with their linked bodies can be large (`call`; commit 2bcb3f2, 2026-10-21).
 - **TLS with a configured CA, off macOS: native-tls.** A self-hosted server's certificate can be one
   self-signed sheet marked `CA:TRUE`; rustls/webpki refuse a CA certificate as the server's own
@@ -92,7 +94,7 @@ the walk this adapter serves, not the adapter.
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.
 - [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every connection gltree asks is followed to its end or fails naming the item.
-- [An error names what it read](an-error-names-what-it-read.md) — a broken glab config, and an answer `parse_comments`, `all_comments` or `brief` cannot read, each say which; three answer sites still print a refusal (the note's holes).
+- [An error names what it read](an-error-names-what-it-read.md) — a broken glab config, a missing token, a CA certificate, git's `origin` remote, the tracker and an answer gltree cannot read each say which; an answer is called refused only on GraphQL `errors` or a non-2xx status.
 
 ## Blast radius
 - [drawing-a-tree](drawing-a-tree.md) — the walk assumes `level` returns every linked item or fails; a silently short page draws a short tree as complete.

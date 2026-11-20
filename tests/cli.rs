@@ -205,11 +205,12 @@ fn a_live_tree_outside_a_clone_says_where_to_run_it() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("origin"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        err.starts_with("gltree: cannot read git's `origin` remote: "),
+        "{err}"
     );
+    assert!(!err.contains("cannot read the tracker"), "{err}");
 }
 
 fn clone_declaring_extra_marker(name: &str) -> std::path::PathBuf {
