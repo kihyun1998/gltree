@@ -213,6 +213,12 @@ fn a_live_tree_outside_a_clone_says_where_to_run_it() {
 }
 
 fn clone_declaring_extra_marker(name: &str) -> std::path::PathBuf {
+    let dir = clone_without_config(name);
+    std::fs::write(dir.join(".gltree.toml"), "extra_keys = [\"marker\"]\n").unwrap();
+    dir
+}
+
+fn clone_without_config(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("gltree-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -224,8 +230,42 @@ fn clone_declaring_extra_marker(name: &str) -> std::path::PathBuf {
             .unwrap()
             .success()
     );
-    std::fs::write(dir.join(".gltree.toml"), "extra_keys = [\"marker\"]\n").unwrap();
     dir
+}
+
+fn stderr_of(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn a_refused_config_is_reported_as_the_config_file_and_exits_2() {
+    let dir = clone_without_config("config-refused");
+    std::fs::write(dir.join(".gltree.toml"), "root_lable = \"X\"\n").unwrap();
+    let out = gltree_in(&dir, &["check", "--snapshot", &fixture_path()]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.starts_with("gltree: .gltree.toml: "), "{err}");
+    assert!(err.contains("root_lable"), "{err}");
+    assert!(
+        !err.contains("snapshot") && !err.contains("tracker"),
+        "{err}"
+    );
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn an_unreadable_config_is_reported_as_the_config_file_and_exits_2() {
+    let dir = clone_without_config("config-unreadable");
+    std::fs::create_dir(dir.join(".gltree.toml")).unwrap();
+    let out = gltree_in(&dir, &["check", "--snapshot", &fixture_path()]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.starts_with("gltree: .gltree.toml: "), "{err}");
+    assert!(
+        !err.contains("snapshot") && !err.contains("tracker"),
+        "{err}"
+    );
+    assert!(out.stdout.is_empty());
 }
 
 fn fixture_path() -> String {

@@ -28,8 +28,13 @@ its own first-line words, and the badges `serve` shows.
   older than a key a consumer adds fails on that consumer's config — the reason a consumer writes a
   version floor beside its config (read in a consumer's config, 2026-11-19).
 
+- **A refusal and an unreadable file are a `config::Error`**, printed `gltree: .gltree.toml: <reason>`
+  and exiting 2, the file name coming from its `Display` (#29). It is the config's own type, not a
+  `tracker::Error` variant: reading the config touches no tracker, and its one caller (`main::run`)
+  returns `Box<dyn Error>`, so no conversion is needed (worker's judgement, 2026-11-20).
+
 ## Code
-- `src/config.rs — FILE, SCHEMES, POLICIES, RepoConfig, Badge, RepoConfig::parse, RepoConfig::scheme, RepoConfig::policy, RepoConfig::of_clone, bare_key, toplevel`
+- `src/config.rs — FILE, SCHEMES, POLICIES, Error, RepoConfig, Badge, RepoConfig::parse, RepoConfig::scheme, RepoConfig::policy, RepoConfig::of_clone, bare_key, toplevel`
 - `src/write.rs — require_opt_in`
 - `src/main.rs — run` (reads the config once, before the command)
 

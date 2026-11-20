@@ -2,14 +2,26 @@
 
 use crate::check::{EveryParent, RootsOnly, StatePolicy};
 use crate::scheme::{FrontMatter, RelationScheme};
-use crate::tracker::Error;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const FILE: &str = ".gltree.toml";
 pub const SCHEMES: &[&str] = &["front-matter"];
 pub const POLICIES: &[&str] = &["roots-only", "every-parent"];
+
+/// Why the repo config was refused or could not be read; shown after the file's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Error(pub String);
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{FILE}: {}", self.0)
+    }
+}
+
+impl std::error::Error for Error {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoConfig {
@@ -68,34 +80,32 @@ impl RepoConfig {
         let Some(text) = text else {
             return Ok(RepoConfig::defaults());
         };
-        let f: File = toml::from_str(text).map_err(|e| Error::Malformed(format!("{FILE}: {e}")))?;
+        let f: File = toml::from_str(text).map_err(|e| Error(e.to_string()))?;
         let d = RepoConfig::defaults();
         let known = |what: &str, v: Option<String>, all: &[&str], default: String| match v {
             None => Ok(default),
             Some(v) if all.contains(&v.as_str()) => Ok(v),
-            Some(v) => Err(Error::Malformed(format!(
-                "{FILE}: unknown {what} `{v}`; known: {}",
+            Some(v) => Err(Error(format!(
+                "unknown {what} `{v}`; known: {}",
                 all.join(", ")
             ))),
         };
         let extra_keys = f.extra_keys.unwrap_or_default();
         if let Some(bad) = extra_keys.iter().find(|k| !bare_key(k)) {
-            return Err(Error::Malformed(format!(
-                "{FILE}: extra key `{bad}` must be a bare TOML key: letters, digits, `_` or `-`"
+            return Err(Error(format!(
+                "extra key `{bad}` must be a bare TOML key: letters, digits, `_` or `-`"
             )));
         }
         let badges = f.badges.unwrap_or_default();
         for b in &badges {
             if b.prefix.is_empty() {
-                return Err(Error::Malformed(format!(
-                    "{FILE}: a badge's prefix must not be empty"
-                )));
+                return Err(Error("a badge's prefix must not be empty".into()));
             }
             if let Some(key) = &b.extra
                 && !extra_keys.contains(key)
             {
-                return Err(Error::Malformed(format!(
-                    "{FILE}: badge `{}` names extra key `{key}`, which extra_keys does not declare",
+                return Err(Error(format!(
+                    "badge `{}` names extra key `{key}`, which extra_keys does not declare",
                     b.prefix
                 )));
             }
@@ -137,7 +147,7 @@ impl RepoConfig {
         match std::fs::read_to_string(root.join(FILE)) {
             Ok(text) => RepoConfig::parse(Some(&text)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => RepoConfig::parse(None),
-            Err(e) => Err(Error::Source(format!("{FILE}: {e}"))),
+            Err(e) => Err(Error(e.to_string())),
         }
     }
 }
