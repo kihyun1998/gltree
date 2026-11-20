@@ -92,6 +92,7 @@ the walk this adapter serves, not the adapter.
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.
 - [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every connection gltree asks is followed to its end or fails naming the item.
+- [An error names what it read](an-error-names-what-it-read.md) — a broken glab config, and an answer `parse_comments`, `all_comments` or `brief` cannot read, each say which; three answer sites still print a refusal (the note's holes).
 
 ## Blast radius
 - [drawing-a-tree](drawing-a-tree.md) — the walk assumes `level` returns every linked item or fails; a silently short page draws a short tree as complete.

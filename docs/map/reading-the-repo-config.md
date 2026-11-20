@@ -42,7 +42,7 @@ its own first-line words, and the badges `serve` shows.
 **None.**
 
 ## Cross-cutting invariants
-**None.**
+- [An error names what it read](an-error-names-what-it-read.md) — `config::Error` names `.gltree.toml`.
 
 ## Blast radius
 - [the-command-line-contract](the-command-line-contract.md) — a key added here is a config a consumer may commit, which older binaries refuse; the version floor moves with it.

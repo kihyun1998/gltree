@@ -45,6 +45,7 @@ filled and every missing link planned, as a dry run, a saved snapshot, or writte
 ## Cross-cutting invariants
 - [Every reference has a link](every-reference-has-a-link.md) — the plan adds the links references lack.
 - [Not recorded is not none](not-recorded-is-not-none.md) — no link is planned for an item whose links were not recorded.
+- [An error names what it read](an-error-names-what-it-read.md) — a header `plan` cannot write names the item's description.
 
 ## Blast radius
 - [holding-references-in-the-header](holding-references-in-the-header.md) — a migrated description that `parse` refuses keeps its new header but gets no derived lists, silently (`plan`'s `let Ok(split) … else`).

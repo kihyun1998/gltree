@@ -71,9 +71,8 @@ pub fn login(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Login, Error> {
     let config: GlabConfig = match glab_yaml {
-        Some(y) => {
-            serde_yaml_ng::from_str(y).map_err(|e| Error::Malformed(format!("glab config: {e}")))?
-        }
+        Some(y) => serde_yaml_ng::from_str(y)
+            .map_err(|e| Error::malformed("the glab config", e.to_string()))?,
         None => GlabConfig::default(),
     };
     let entry = config.hosts.get(host);
@@ -183,10 +182,19 @@ hosts:
     }
 
     #[test]
+    fn a_broken_config_is_reported_as_the_glab_config_not_a_snapshot() {
+        let e = login(Some("hosts: [unclosed"), "gitlab.example.com", &none)
+            .unwrap_err()
+            .to_string();
+        assert!(e.starts_with("the glab config is malformed: "), "{e}");
+        assert!(!e.contains("snapshot"), "{e}");
+    }
+
+    #[test]
     fn a_broken_config_is_an_error_not_a_missing_host() {
         assert!(matches!(
             login(Some("hosts: [unclosed"), "gitlab.example.com", &none),
-            Err(Error::Malformed(_))
+            Err(Error::Malformed { .. })
         ));
     }
 

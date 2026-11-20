@@ -14,6 +14,8 @@ use ureq::tls::{PemItem, RootCerts, TlsConfig, TlsProvider, parse_pem};
 /// Item numbers per level request; with 100 linked items each it stays under GitLab's complexity cap.
 pub const LEVEL_BATCH: usize = 100;
 
+const ANSWER: &str = "the server's answer";
+
 pub struct GitLab {
     agent: Agent,
     login: Login,
@@ -424,8 +426,12 @@ fn parse_comments(node: &Value) -> Result<Option<CommentPage>, Error> {
     else {
         return Ok(None);
     };
-    let bad =
-        |n: &Value| Error::Malformed(format!("a comment without createdAt/body/internal: {n}"));
+    let bad = |n: &Value| {
+        Error::malformed(
+            ANSWER,
+            format!("a comment without createdAt/body/internal: {n}"),
+        )
+    };
     let mut comments = Vec::new();
     for n in notes["nodes"].as_array().into_iter().flatten() {
         if n["system"].as_bool() == Some(true) {
@@ -448,8 +454,9 @@ fn parse_comments(node: &Value) -> Result<Option<CommentPage>, Error> {
     let next = match notes.pointer("/pageInfo/endCursor").and_then(Value::as_str) {
         Some(cursor) if more => Some(cursor.to_string()),
         None if more => {
-            return Err(Error::Malformed(
-                "a page of comments says there is more but gives no cursor".into(),
+            return Err(Error::malformed(
+                ANSWER,
+                "a page of comments says there is more but gives no cursor",
             ));
         }
         _ => None,
@@ -478,7 +485,10 @@ fn all_comments(
             .pointer("/project/workItems/nodes/0")
             .ok_or(Error::NotFound(iid))?;
         let page = parse_comments(node)?.ok_or_else(|| {
-            Error::Malformed(format!("a further page of #{iid}'s comments without them"))
+            Error::malformed(
+                ANSWER,
+                format!("a further page of #{iid}'s comments without them"),
+            )
         })?;
         comments.extend(page.comments);
         next = page.next;
@@ -581,7 +591,7 @@ pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
 }
 
 fn brief(n: &Value) -> Result<Item, Error> {
-    let bad = || Error::Malformed(format!("a work item without iid/title/state: {n}"));
+    let bad = || Error::malformed(ANSWER, format!("a work item without iid/title/state: {n}"));
     let iid = n["iid"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -929,7 +939,7 @@ mod tests {
         let mut ask = scripted(vec![page(vec![full_node(1, vec![widget])], None)], &asked);
         assert!(matches!(
             read_items_with_comments("team/app", &mut ask),
-            Err(Error::Malformed(_))
+            Err(Error::Malformed { .. })
         ));
     }
 
@@ -948,8 +958,17 @@ mod tests {
         );
         assert!(matches!(
             read_items_with_comments("team/app", &mut ask),
-            Err(Error::Malformed(_))
+            Err(Error::Malformed { .. })
         ));
+    }
+
+    #[test]
+    fn a_work_item_without_a_title_is_reported_as_the_servers_answer() {
+        let e = brief(&json!({ "iid": "1", "state": "OPEN" }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.starts_with("the server's answer is malformed: "), "{e}");
+        assert!(!e.contains("snapshot"), "{e}");
     }
 
     #[test]
@@ -980,7 +999,7 @@ mod tests {
         );
         assert!(matches!(
             read_item_with_comments("team/app", 1, &mut ask),
-            Err(Error::Malformed(_))
+            Err(Error::Malformed { .. })
         ));
     }
 

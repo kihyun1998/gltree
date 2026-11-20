@@ -9,8 +9,12 @@ use std::fmt;
 pub enum Error {
     /// Reading the source failed (a file, a missing login, the network).
     Source(String),
-    /// The source was read but its content is not a tracker.
-    Malformed(String),
+    /// Something gltree read is not in the shape it reads: `what` names that thing (the snapshot
+    /// file, the glab config, the server's answer, an item's description), `why` says how.
+    Malformed {
+        what: String,
+        why: String,
+    },
     /// The server answered with an error of its own: a refusal, a rate or complexity limit.
     Server(String),
     NotFound(u64),
@@ -24,11 +28,20 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Source(m) => write!(f, "cannot read the tracker: {m}"),
-            Error::Malformed(m) => write!(f, "not a tracker snapshot: {m}"),
+            Error::Malformed { what, why } => write!(f, "{what} is malformed: {why}"),
             Error::Server(m) => write!(f, "the server refused: {m}"),
             Error::NotFound(n) => write!(f, "#{n} is not in the tracker"),
             Error::Refused(m) => write!(f, "{m}"),
             Error::Unfinished(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl Error {
+    pub fn malformed(what: impl Into<String>, why: impl Into<String>) -> Self {
+        Error::Malformed {
+            what: what.into(),
+            why: why.into(),
         }
     }
 }

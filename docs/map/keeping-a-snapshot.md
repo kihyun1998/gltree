@@ -51,6 +51,7 @@ the safe replace that `snapshot` and `migrate --out` share.
 
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `comments`, `links`, `closed_at`.
+- [An error names what it read](an-error-names-what-it-read.md) — only an error about the snapshot file names the snapshot as what was read.
 
 ## Blast radius
 - [showing-an-item](showing-an-item.md) — `show --snapshot` prints what this file holds; a comment field not saved cannot be shown.

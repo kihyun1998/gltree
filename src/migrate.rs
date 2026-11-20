@@ -164,7 +164,8 @@ pub fn plan(items: &[Item], words: &Words, extra_keys: &[String]) -> Result<Plan
     let mut migrated: Vec<Item> = items.to_vec();
     for it in &mut migrated {
         if let Some((h, lines, body)) = read_head(&it.desc, words, extra_keys) {
-            let text = header::with_header(body, &h).map_err(Error::Malformed)?;
+            let text = header::with_header(body, &h)
+                .map_err(|e| Error::malformed(format!("#{}'s description", it.iid), e))?;
             heads.insert(it.iid, lines);
             it.desc = text;
         }
@@ -415,6 +416,17 @@ mod tests {
             item(3, "marker: K-3\n\nParent: #1\n\n## Body\r\ntext", &[1]),
             item(4, "From: #2 (seen there)\n\nfour", &[2]),
         ]
+    }
+
+    #[test]
+    fn a_description_whose_header_never_closes_is_reported_as_that_description() {
+        let items = vec![
+            item(1, "", &[2]),
+            item(2, "Parent: #1\n\n+++\nparent = 1\n", &[1]),
+        ];
+        let e = plan(&items, &words(), &[]).unwrap_err().to_string();
+        assert!(e.starts_with("#2's description is malformed: "), "{e}");
+        assert!(!e.contains("snapshot"), "{e}");
     }
 
     #[test]

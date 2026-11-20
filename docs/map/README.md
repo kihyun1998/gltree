@@ -32,6 +32,7 @@ A linked note graph of what gltree does. It answers two questions before a chang
 - [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md)
 - [Not recorded is not none](not-recorded-is-not-none.md)
 - [One rule for a finished family](one-rule-for-a-finished-family.md)
+- [An error names what it read](an-error-names-what-it-read.md)
 
 ## How to read it
 - `## Blast radius` is a checklist: each edge names what goes wrong over there. An item with nothing to do is a correct outcome.

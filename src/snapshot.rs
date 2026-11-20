@@ -22,7 +22,8 @@ impl SnapshotFile {
     }
 
     pub fn parse(bytes: &[u8]) -> Result<Vec<Item>, Error> {
-        serde_json::from_slice(bytes).map_err(|e| Error::Malformed(e.to_string()))
+        serde_json::from_slice(bytes)
+            .map_err(|e| Error::malformed("the snapshot file", e.to_string()))
     }
 
     /// Saves `items` at `path`, replacing what is there only once the new file is complete.
@@ -254,6 +255,14 @@ mod tests {
             ),
             (3, State::Closed, vec![1])
         );
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_list_of_items_is_reported_as_the_snapshot() {
+        let e = SnapshotFile::parse(br#"{"iid": 3}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.starts_with("the snapshot file is malformed: "), "{e}");
     }
 
     #[test]
