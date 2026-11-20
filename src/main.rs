@@ -726,11 +726,10 @@ Output:
         long_about = "Starts a local web server on 127.0.0.1 only, out of reach of other machines,
 reads the whole tracker, prints the page's address and serves the page until
 Ctrl+C. On the left are the families (a root and everything under it), as
-`gltree tree` picks them, the
-finished ones behind a toggle, each with its progress and badges; on the
-right is the selected family's tree, read fresh, every item linked to its
-page on the server. The refresh button reads the whole tracker again. It
-writes nothing to the tracker.
+`gltree tree` picks them, the finished ones behind a toggle, each with its
+progress and badges; on the right is the selected family's tree, read fresh,
+every item linked to its page on the server. The refresh button reads the
+whole tracker again. It writes nothing to the tracker.
 
 Badges come from `[[badges]]` in the repo config: each names a label prefix,
 and a root's label that starts with it is shown as a badge.",

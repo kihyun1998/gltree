@@ -258,7 +258,8 @@ both ends. Nothing else in the header or the body changes, and an item already r
 written, so a second run writes nothing. `sync 12` reads #12 with the items linked to it — every
 reference has a link — so a reference without its link is not seen until `check`'s `unlinked` is
 fixed. It refuses a header out of form. Writing needs `.gltree.toml`; `--dry-run` does not.
-Text: `#N key [before] -> [after]` per change; `--json` prints
+Text: `#N key [before] -> [after]` per change, then `N items would change` (with `--dry-run`) or
+`N items changed`; `--json` prints
 `{"version": 1, "written", "changes": [{item, key, before, after}]}`.
 
 ## Serve
