@@ -9,7 +9,7 @@ a person reads during an outage or as JSON.
 
 ## Design model
 - **From the server** it reads one item with its own query (`item_query_with_comments`), since
-  `level` brings no labels; it does not ask for links, which it does not print, so more than 100 links
+  `level` brings no comments, closing date or type; it does not ask for links, which it does not print, so more than 100 links
   does not stop it (`read_item_with_comments` sets `links` to `None`); more than 100 labels does
   ([reading-the-server](reading-the-server.md)).
 - **The text cannot be forged by what it prints**: gltree's own lines sit at the margin and what people

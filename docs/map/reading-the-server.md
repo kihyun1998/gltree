@@ -84,8 +84,10 @@ the walk this adapter serves, not the adapter.
 - The GraphQL complexity cap on a self-hosted CE is 250; the level query with 100 items fits
   (commit 2bcb3f2, 2026-10-21). With `webUrl` and labels added for each item and each linked item,
   the same 100 × 100 query was accepted by a self-hosted CE, and the root it read came back with its
-  `url`, `labels` and `extra` filled (one read-only run, 2026-11-19). That run asked labels without a
-  page; the paged selection (#28) has not been run against a server here.
+  `url`, `labels` and `extra` filled (one read-only run, 2026-11-19). With labels asked a page of 100
+  and `hasNextPage` (#28), `tree --all`, `tree N` over a 54-item family, `show`, `snapshot` and
+  `check` all read without a complexity error, and no item there held more than 12 labels (one
+  read-only run, 2026-11-20).
 
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.
