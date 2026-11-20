@@ -101,7 +101,9 @@ reasons below.
   Selecting a family moves the highlight and crossfades the detail, its ring filling once (`choose`).
   The tree `/api/tree/N` brings replaces the detail's contents in place (`draw`), keeping the detail
   element, so a fade-in still running carries on uninterrupted and the new ring starts from the offset
-  the old one showed. A tree whose markup is the same as what is shown changes nothing. Clicking the
+  the old one showed. A tree whose markup is the same as what is shown changes nothing; on a live
+  self-hosted tracker the walk and the full read gave the same JSON for families of 1, 2, 5 and 54
+  items, so a selection there takes this path (read-only run, 2026-11-20). Clicking the
   selected family again reads `/api/tree/N` again and puts it in place through `draw`, with no fade
   (worker's judgement, 2026-11-19).
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
