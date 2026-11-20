@@ -72,7 +72,7 @@ the walk this adapter serves, not the adapter.
 - `src/tracker.rs — Tracker, Error, Linked, Created, FakeTracker, level_of`
 - `src/remote.rs — Remote::parse, Remote::of_clone`
 - `src/login.rs — Login, TOKEN_ENV, CA_ENV, glab_config_paths, read_glab_config, login`
-- `src/gitlab.rs — GitLab::new, GitLab::graphql, GitLab::rest, GitLab::call, Tracker for GitLab, LEVEL_BATCH, level_query, parse_level, page_query, parse_page, brief, answer, created, linked, link_id, encode_path`
+- `src/gitlab.rs — GitLab::new, GitLab::graphql, GitLab::rest, GitLab::call, Tracker for GitLab, LEVEL_BATCH, level_query, parse_level, page_query, parse_page, next_cursor, brief, answer, created, linked, link_id, encode_path`
 - `src/macos_tls.rs — agent, parse_ca_ders, PinnedVerifier, check_name_and_validity, host_matches, PinnedConnector, PinnedTlsTransport`
 - `src/main.rs — server, source`
 - `Cargo.toml — ureq features, the macOS-only rustls and x509-parser dependencies`

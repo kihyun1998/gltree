@@ -460,21 +460,26 @@ fn parse_comments(node: &Value) -> Result<Option<CommentPage>, Error> {
             internal: n["internal"].as_bool().ok_or_else(|| bad(n))?,
         });
     }
-    let more = notes
+    let next = next_cursor(notes, "comments")?;
+    Ok(Some(CommentPage { comments, next }))
+}
+
+fn next_cursor(connection: &Value, what: &str) -> Result<Option<String>, Error> {
+    let more = connection
         .pointer("/pageInfo/hasNextPage")
         .and_then(Value::as_bool)
         == Some(true);
-    let next = match notes.pointer("/pageInfo/endCursor").and_then(Value::as_str) {
-        Some(cursor) if more => Some(cursor.to_string()),
-        None if more => {
-            return Err(Error::malformed(
-                ANSWER,
-                "a page of comments says there is more but gives no cursor",
-            ));
-        }
-        _ => None,
-    };
-    Ok(Some(CommentPage { comments, next }))
+    match connection
+        .pointer("/pageInfo/endCursor")
+        .and_then(Value::as_str)
+    {
+        Some(cursor) if more => Ok(Some(cursor.to_string())),
+        None if more => Err(Error::malformed(
+            ANSWER,
+            format!("a page of {what} says there is more but gives no cursor"),
+        )),
+        _ => Ok(None),
+    }
 }
 
 /// All of an item's comments, oldest first, from its node and the pages after it; `None` when
@@ -599,13 +604,7 @@ pub fn parse_page(data: &Value) -> Result<(Vec<Item>, Option<String>), Error> {
         );
         items.push(item);
     }
-    let next = (wi.pointer("/pageInfo/hasNextPage").and_then(Value::as_bool) == Some(true))
-        .then(|| {
-            wi.pointer("/pageInfo/endCursor")
-                .and_then(Value::as_str)
-                .map(String::from)
-        })
-        .flatten();
+    let next = next_cursor(wi, "work items")?;
     Ok((items, next))
 }
 
@@ -721,6 +720,43 @@ mod tests {
             "iid": "1", "title": "t1", "state": "OPEN", "workItemType": { "name": "Issue" },
             "widgets": [{ "linkedItems": { "pageInfo": { "hasNextPage": true }, "nodes": [] } }] }] } } });
         assert!(parse_page(&data).is_err());
+    }
+
+    fn page_info_answer(page_info: Value) -> Value {
+        json!({ "project": { "workItems": { "pageInfo": page_info, "nodes": [{
+            "iid": "1", "title": "t1", "state": "OPEN", "workItemType": { "name": "Issue" },
+            "widgets": [] }] } } })
+    }
+
+    fn assert_more_without_a_cursor_is_malformed(page_info: Value) {
+        match parse_page(&page_info_answer(page_info)) {
+            Err(Error::Malformed { what, why }) => {
+                assert_eq!(what, ANSWER);
+                assert_eq!(
+                    why,
+                    "a page of work items says there is more but gives no cursor"
+                );
+            }
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_next_page_of_items_with_no_cursor_is_an_error_not_a_short_list() {
+        assert_more_without_a_cursor_is_malformed(json!({ "hasNextPage": true }));
+    }
+
+    #[test]
+    fn a_next_page_of_items_with_a_null_cursor_is_an_error_not_a_short_list() {
+        assert_more_without_a_cursor_is_malformed(
+            json!({ "hasNextPage": true, "endCursor": null }),
+        );
+    }
+
+    #[test]
+    fn the_last_page_of_items_without_a_cursor_ends_the_read() {
+        let (items, next) = parse_page(&page_info_answer(json!({ "hasNextPage": false }))).unwrap();
+        assert_eq!((items.len(), next), (1, None));
     }
 
     #[test]
