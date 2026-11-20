@@ -53,8 +53,8 @@ reasons below.
 - **Default port 7420**, a free pick (worker's judgement, 2026-11-19); `--port 0` takes a free one and
   the printed address says which.
 - **The page** (`src/serve.html`, `include_str!` into `PAGE`): hand-written HTML, CSS and JS, no
-  framework, no build step, and no outside address in it (a unit test refuses `://`). Its layout and
-  motion follow the Split prototype the maintainer chose (2026-11-19). It applies the finished-family
+  framework, no build step, and no outside address in it (a unit test refuses `://`). Its layout
+  follows the Split prototype the maintainer chose (2026-11-19). It applies the finished-family
   toggle itself with `tree`'s rule — a root closed with `closed == total` — and computes badges,
   filters and counts from `labels`, `extra` and the config's `badges`. The toggle is the "All"
   filter's own test and governs the "All" list only. Every badge filter's values and list, every
@@ -70,22 +70,40 @@ reasons below.
   badge and value, not its place in the list, since the buttons are drawn again on every filter,
   toggle and refresh. Open
   blockers show on every node, the root in the list and the detail included. Counting motion is off
-  under reduced motion, as the CSS animations are.
+  under reduced motion, as the fades are.
+- **How the page moves** (maintainer, 2026-11-20, choosing variant D of four after the earlier motion
+  was too strong to look at and a version with almost no fade flickered). Content moves by opacity only:
+  nothing slides, rises, scales, overshoots or lifts on hover. Content enters by a plain 0.22 s fade (the
+  CSS class `enter`); a list or a tree fades in as one block, with no per-row delay. The detail and the
+  list rows (as one block) change by a crossfade (`fade()`, which also gives the new content its
+  `enter`): the old node itself, not a copy, becomes the ghost; it is taken out of the flow over the same
+  place, held to both side edges of its container so that it keeps the new content's width when a
+  scrollbar comes or goes, and fades out in 0.22 s while the new content fades in under it, so the place never goes blank.
+  The ghost loses its id and is `inert`, so it takes no pointer events and is hidden from assistive
+  technology; it starts at the opacity the old content showed at that moment (a fade-in cut short does
+  not pop back to full), and removes itself when its own fade ends or is cancelled, as when reduced
+  motion turns on mid-fade. Three things that are not content keep a motion of their own: the
+  highlight moves to the selected row in 0.22 s and the ring fills in 0.4 s, both on the page's `--ease`
+  curve, which does not overshoot, and the hero counts up in 0.3 s. The switch knob slides between its
+  two sides on the same curve, since its side is the switch's state (worker's judgement, 2026-11-20),
+  and the refresh button's busy icon spins. Under reduced motion every fade, crossfade, highlight move,
+  ring fill, count and the spin is off or instant, except the knob's slide: the CSS rule that turns
+  motion off selects `*`, which does not match the knob's `::after` (a gap held for the maintainer).
 - **What each act draws** (maintainer, 2026-11-19: selecting a family must not stutter; a detail
   drawn a second time when the walk's tree arrives plays its entrance and ring again). The first read
-  and a refresh draw the whole page (`paint`): the hero counts up, and the list and the detail enter.
-  A filter or the toggle draws the filter buttons and the list rows again (`relist`): the hero counts
-  every family, so neither changes it, and the highlight stays the same element and slides to the
-  selected row. A selected family the list keeps keeps its detail as it is, a stale note included,
-  and is not read again; a list that drops it selects its first family and draws it as `choose`
-  does, and an empty list draws its empty detail in place. Selecting a family slides the highlight
-  and draws the detail with its entrance and ring once (`choose`). The tree `/api/tree/N` brings
-  replaces the detail's contents in place (`draw`), keeping the detail element, so its entrance
-  carries on uninterrupted: a row still inside its 500 ms entrance (the CSS `inup`) is drawn with
-  its delay shortened by the time already passed, so it carries on from where it is, and the new ring
-  starts from the offset the old one showed. A tree whose markup is the same as what is shown changes
-  nothing. Clicking the selected family again reads `/api/tree/N` again and puts it in place
-  through `draw`, with no entrance (worker's judgement, 2026-11-19).
+  and a refresh draw the whole page (`paint`): the hero counts up, and the list and the detail fade in.
+  A filter or the toggle draws the filter buttons again and crossfades the list rows when their markup
+  changed (`relist`): the hero counts every family, so neither changes it, and the highlight stays the
+  same element and moves to the selected row. A selected family that stays in the list keeps its detail
+  as it is, a stale note included, and is not read again. A list that drops it selects its first family
+  and crossfades the detail as `choose` does; a list left empty whose message changes crossfades the
+  detail to the new message. A filter whose rows and detail markup come out the same changes nothing.
+  Selecting a family moves the highlight and crossfades the detail, its ring filling once (`choose`).
+  The tree `/api/tree/N` brings replaces the detail's contents in place (`draw`), keeping the detail
+  element, so a fade-in still running carries on uninterrupted and the new ring starts from the offset
+  the old one showed. A tree whose markup is the same as what is shown changes nothing. Clicking the
+  selected family again reads `/api/tree/N` again and puts it in place through `draw`, with no fade
+  (worker's judgement, 2026-11-19).
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
   `http:` or `https:` URL** (`safeUrl`); any other `url`, `null` included, renders the node
   without a link. `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them
@@ -117,5 +135,5 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
-- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19). The repository runs no JavaScript.
+- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).
