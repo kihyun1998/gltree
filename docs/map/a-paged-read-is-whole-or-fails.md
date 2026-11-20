@@ -37,4 +37,4 @@ A new connection in any query (a field written `x{nodes{â€¦}}` or `x(first:N){â€
 ask `pageInfo`, and either follow it or fail naming the item.
 
 ## Known holes / open
-**None.**
+- Shapes outside GitLab's contract are not guarded: an answer with no `pageInfo` or a `hasNextPage` that is not a boolean reads as the last page (a short read), and a repeated or empty cursor with `hasNextPage: true` asks again without end. graphql-ruby declares `pageInfo` and `hasNextPage` non-null (a missing one comes back as `errors`, which `answer` fails on) and GitLab's keyset cursor cannot repeat or be empty, so only a non-conforming server or proxy sends them (probe tests and a reading of both sources during #32, 2026-11-20).
