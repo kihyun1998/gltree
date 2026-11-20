@@ -8,8 +8,8 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     /// Something gltree reads could not be read: `what` names that thing (the tracker, the glab
-    /// login, a CA certificate, git's `origin` remote, the snapshot file, the current directory),
-    /// `why` says why.
+    /// config, the glab login, a CA certificate, git's `origin` remote, the snapshot file, the
+    /// current directory), `why` says why.
     Source {
         what: String,
         why: String,

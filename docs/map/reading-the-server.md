@@ -19,7 +19,12 @@ the walk this adapter serves, not the adapter.
   else `~/.config/glab-cli/config.yml`, then the platform directory (`XDG_CONFIG_HOME`, else
   `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS). From `hosts.<host>`:
   `token`, `ca_cert`, `api_host`, `api_protocol`. `GITLAB_TOKEN` and `GLTREE_CA_CERT` override them.
-  Source: `glab_config_paths`, `login`.
+  The first candidate that is there is read; one that is not there (`NotFound`) moves on to the next,
+  and one that is there and cannot be read (a directory, no permission) fails naming its path, as
+  `RepoConfig::of_clone` treats only `NotFound` as absent (#29). It fails with `GITLAB_TOKEN` set too,
+  since the config may hold the host's `ca_cert`, `api_host` and `api_protocol`. Bytes that are not
+  YAML in UTF-8 are a malformed config, judged by the YAML parser (`login`).
+  Source: `glab_config_paths`, `read_glab_config`, `login`.
 - **Reads** are GraphQL. `level` writes the item numbers into the query text (`iids:["3","12"]`), at
   most `LEVEL_BATCH` = 100 per request with `linkedItems(first:100)` each; an overflow of linked items
   is an error, since a short tree would look complete. It asks `webUrl` and labels for each item and
@@ -66,7 +71,7 @@ the walk this adapter serves, not the adapter.
 ## Code
 - `src/tracker.rs — Tracker, Error, Linked, Created, FakeTracker, level_of`
 - `src/remote.rs — Remote::parse, Remote::of_clone`
-- `src/login.rs — Login, TOKEN_ENV, CA_ENV, glab_config_paths, login`
+- `src/login.rs — Login, TOKEN_ENV, CA_ENV, glab_config_paths, read_glab_config, login`
 - `src/gitlab.rs — GitLab::new, GitLab::graphql, GitLab::rest, GitLab::call, Tracker for GitLab, LEVEL_BATCH, level_query, parse_level, page_query, parse_page, brief, answer, created, linked, link_id, encode_path`
 - `src/macos_tls.rs — agent, parse_ca_ders, PinnedVerifier, check_name_and_validity, host_matches, PinnedConnector, PinnedTlsTransport`
 - `src/main.rs — server, source`
@@ -75,6 +80,18 @@ the walk this adapter serves, not the adapter.
 ## Reference behaviour
 - glab's config format and `ca_cert` handling: its source tree, gitlab.com/gitlab-org/cli — raw,
   binding (thegraph build, [docs/agents/thegraph.md](../agents/thegraph.md)).
+- glab reads its config before any command and exits 2 when it cannot: `cmd/glab/main.go` calls
+  `config.Init()` first, which creates `ConfigDir()` with `os.MkdirAll`; `SearchConfigFile`
+  (`internal/config/config_file.go`) takes `GLAB_CONFIG_DIR/config.yml` alone when set, else the first
+  that exists of the legacy `~/.config/glab-cli/config.yml` and adrg/xdg v0.5.3's search
+  (`XDG_CONFIG_HOME`, then `XDG_CONFIG_DIRS`), "exists" being `os.Stat` succeeding (on Windows
+  `Lstat`, following a link); `parseConfig` returns every read error but not-exist. `GITLAB_TOKEN` is
+  looked at only after that (`envValueForHost` under `GetWithSource`), so glab fails with the token
+  set too (gitlab-org/cli at 7456450, raw, read 2026-11-20). gltree matches it for a config that is
+  not there, for one that is there and cannot be read, and with `GITLAB_TOKEN` set. Reading past an
+  unreadable config drops the `ca_cert`, `api_host` and `api_protocol` it holds and sends the token
+  to the remote's host (run on the binary before #29's third follow-up, 2026-11-20). Where it
+  differs is under *Known holes*.
 - GitLab CE GraphQL and REST: the GitLab docs — summarized, binding; what rests on them needs
   confirming against a server (same build).
 - The issue search API is rate-limited ("requested with the search argument too many times") and
@@ -94,7 +111,7 @@ the walk this adapter serves, not the adapter.
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.
 - [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every connection gltree asks is followed to its end or fails naming the item.
-- [An error names what it read](an-error-names-what-it-read.md) — a broken glab config, a missing token, a CA certificate, git's `origin` remote, the tracker and an answer gltree cannot read each say which; an answer is called refused only on GraphQL `errors` or a non-2xx status.
+- [An error names what it read](an-error-names-what-it-read.md) — an unreadable or broken glab config, a missing token, a CA certificate, git's `origin` remote, the tracker and an answer gltree cannot read each say which; an answer is called refused only on GraphQL `errors` or a non-2xx status.
 
 ## Blast radius
 - [drawing-a-tree](drawing-a-tree.md) — the walk assumes `level` returns every linked item or fails; a silently short page draws a short tree as complete.
@@ -106,4 +123,18 @@ the walk this adapter serves, not the adapter.
 
 ## Known holes / open
 - A token glab keeps in the OS keyring (`use_keyring`) is not read; the error names `GITLAB_TOKEN`.
+- glab also searches `XDG_CONFIG_DIRS` (`/etc/xdg` by default on Unix); `glab_config_paths` does
+  not, so a config only there reads as absent (glab 1.97.0 read a token from it that gltree did not
+  see, 2026-11-20).
+- A UTF-16 glab config with a BOM, what Windows PowerShell 5.1's `>` writes, is read by glab (its
+  go.yaml.in/yaml/v3 detects the encoding in `yaml_parser_determine_encoding`, `readerc.go`) and is
+  a malformed config to gltree, whose serde_yaml_ng reads UTF-8 only (glab 1.97.0 run, 2026-11-20).
+- A candidate that cannot be reached for a reason other than not existing: on Unix (`NotADirectory`,
+  `PermissionDenied`) gltree fails naming it; on Windows a regular file in the path is
+  `ERROR_PATH_NOT_FOUND`, read as `NotFound`, so gltree moves on. glab's search skips a candidate
+  `os.Stat` cannot find, but `Init`'s `MkdirAll` fails first when the candidate's directory is its
+  `ConfigDir()`. Read from Rust's `sys/io/error` and glab's source; the Windows case was run, the
+  Unix one was not.
+- glab refuses a user config whose permissions are not 600 (`ParseConfigFile`); gltree does not
+  check them.
 - The macOS pinned-verifier path builds its own connector chain, so it does not go through an HTTP or SOCKS proxy. Tracked: #11.

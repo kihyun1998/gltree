@@ -269,6 +269,96 @@ fn an_unreadable_config_is_reported_as_the_config_file_and_exits_2() {
     assert!(out.stdout.is_empty());
 }
 
+fn clone_with_origin(name: &str) -> std::path::PathBuf {
+    let dir = clone_without_config(name);
+    assert!(
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.example.invalid/team/app.git"
+            ])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    dir
+}
+
+fn live_tree_with_glab_config(
+    dir: &Path,
+    config: impl FnOnce(&Path),
+) -> (Output, std::path::PathBuf) {
+    let glab = dir.join("glab");
+    std::fs::create_dir_all(&glab).unwrap();
+    let path = glab.join("config.yml");
+    config(&path);
+    let out = gltree_cmd(dir, &["tree", "1"])
+        .env("GLAB_CONFIG_DIR", &glab)
+        .env_remove("GITLAB_TOKEN")
+        .output()
+        .unwrap();
+    (out, path)
+}
+
+#[test]
+fn a_glab_config_that_is_a_directory_is_reported_as_unreadable_not_as_holding_no_token() {
+    let dir = clone_with_origin("glab-config-dir");
+    let (out, path) = live_tree_with_glab_config(&dir, |p| std::fs::create_dir(p).unwrap());
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(
+        err.starts_with(&format!(
+            "gltree: cannot read the glab config {}: ",
+            path.display()
+        )),
+        "{err}"
+    );
+    assert!(!err.contains("no token"), "{err}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn a_glab_config_that_is_not_utf8_is_reported_as_malformed_not_as_holding_no_token() {
+    let dir = clone_with_origin("glab-config-not-utf8");
+    let (out, _) =
+        live_tree_with_glab_config(&dir, |p| std::fs::write(p, b"\xff\xfehosts: {}\n").unwrap());
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(
+        err.starts_with("gltree: the glab config is malformed: "),
+        "{err}"
+    );
+    assert!(!err.contains("no token"), "{err}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn an_unreadable_glab_config_fails_even_with_gitlab_token_set() {
+    let dir = clone_with_origin("glab-config-dir-with-token");
+    let glab = dir.join("glab");
+    let path = glab.join("config.yml");
+    std::fs::create_dir_all(&path).unwrap();
+    let out = gltree_cmd(&dir, &["tree", "1"])
+        .env("GLAB_CONFIG_DIR", &glab)
+        .env("GITLAB_TOKEN", "a-token")
+        .output()
+        .unwrap();
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(
+        err.starts_with(&format!(
+            "gltree: cannot read the glab config {}: ",
+            path.display()
+        )),
+        "{err}"
+    );
+    assert!(!err.contains("tracker"), "{err}");
+    assert!(out.stdout.is_empty());
+}
+
 fn fixture_path() -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(FIXTURE)

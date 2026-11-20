@@ -232,9 +232,7 @@ fn server() -> Result<GitLab, TrackerError> {
     let dir = current_dir()?;
     let remote = Remote::of_clone(&dir)?;
     let env = |k: &str| std::env::var(k).ok();
-    let yaml = login::glab_config_paths(&env, std::env::home_dir())
-        .into_iter()
-        .find_map(|p| std::fs::read_to_string(p).ok());
+    let yaml = login::read_glab_config(&login::glab_config_paths(&env, std::env::home_dir()))?;
     let login = login::login(yaml.as_deref(), &remote.host, &env)?;
     GitLab::new(login, &remote.path)
 }

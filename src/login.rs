@@ -63,15 +63,33 @@ pub fn glab_config_paths(
     paths
 }
 
-/// The login for `host` from glab's config text (`None` when there is no config), with the
+/// The bytes of the first glab config that exists among `paths` (`None` when none does). A path
+/// that is not there moves on to the next; one that is there and cannot be read fails, naming it.
+pub fn read_glab_config(paths: &[PathBuf]) -> Result<Option<Vec<u8>>, Error> {
+    for p in paths {
+        match std::fs::read(p) {
+            Ok(bytes) => return Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(Error::unreadable(
+                    format!("the glab config {}", p.display()),
+                    e.to_string(),
+                ));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The login for `host` from glab's config (`None` when there is no config), with the
 /// environment overrides applied.
 pub fn login(
-    glab_yaml: Option<&str>,
+    glab_yaml: Option<&[u8]>,
     host: &str,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Login, Error> {
     let config: GlabConfig = match glab_yaml {
-        Some(y) => serde_yaml_ng::from_str(y)
+        Some(y) => serde_yaml_ng::from_slice(y)
             .map_err(|e| Error::malformed("the glab config", e.to_string()))?,
         None => GlabConfig::default(),
     };
@@ -139,7 +157,7 @@ hosts:
     #[test]
     fn reads_the_hosts_token_api_address_and_ca() {
         assert_eq!(
-            login(Some(YAML), "gitlab.example.com", &none).unwrap(),
+            login(Some(YAML.as_bytes()), "gitlab.example.com", &none).unwrap(),
             Login {
                 api_base: "https://gitlab.example.com".into(),
                 token: "example-token".into(),
@@ -151,7 +169,9 @@ hosts:
     #[test]
     fn a_host_without_a_ca_uses_the_default_roots() {
         assert_eq!(
-            login(Some(YAML), "gitlab.com", &none).unwrap().ca_cert,
+            login(Some(YAML.as_bytes()), "gitlab.com", &none)
+                .unwrap()
+                .ca_cert,
             None
         );
     }
@@ -163,7 +183,7 @@ hosts:
             CA_ENV => Some("/etc/ca.pem".to_string()),
             _ => None,
         };
-        let l = login(Some(YAML), "gitlab.example.com", &env).unwrap();
+        let l = login(Some(YAML.as_bytes()), "gitlab.example.com", &env).unwrap();
         assert_eq!(
             (l.token.as_str(), l.ca_cert),
             ("env-token", Some(PathBuf::from("/etc/ca.pem")))
@@ -183,14 +203,14 @@ hosts:
     #[test]
     fn no_token_anywhere_names_the_variable_to_set() {
         let yaml = "hosts:\n    gitlab.example.com:\n        use_keyring: true\n";
-        let e = login(Some(yaml), "gitlab.example.com", &none)
+        let e = login(Some(yaml.as_bytes()), "gitlab.example.com", &none)
             .unwrap_err()
             .to_string();
         assert!(
             e.contains(TOKEN_ENV) && e.contains("gitlab.example.com"),
             "{e}"
         );
-        let e = login(Some(YAML), "other.example.com", &none)
+        let e = login(Some(YAML.as_bytes()), "other.example.com", &none)
             .unwrap_err()
             .to_string();
         assert!(e.contains(TOKEN_ENV), "{e}");
@@ -198,9 +218,13 @@ hosts:
 
     #[test]
     fn a_broken_config_is_reported_as_the_glab_config_not_a_snapshot() {
-        let e = login(Some("hosts: [unclosed"), "gitlab.example.com", &none)
-            .unwrap_err()
-            .to_string();
+        let e = login(
+            Some("hosts: [unclosed".as_bytes()),
+            "gitlab.example.com",
+            &none,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(e.starts_with("the glab config is malformed: "), "{e}");
         assert!(!e.contains("snapshot"), "{e}");
     }
@@ -208,9 +232,51 @@ hosts:
     #[test]
     fn a_broken_config_is_an_error_not_a_missing_host() {
         assert!(matches!(
-            login(Some("hosts: [unclosed"), "gitlab.example.com", &none),
+            login(
+                Some("hosts: [unclosed".as_bytes()),
+                "gitlab.example.com",
+                &none
+            ),
             Err(Error::Malformed { .. })
         ));
+    }
+
+    #[test]
+    fn a_glab_config_that_is_not_there_moves_on_to_the_next_candidate() {
+        let dir =
+            std::env::temp_dir().join(format!("gltree-glab-config-next-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let second = dir.join("second.yml");
+        std::fs::write(&second, YAML).unwrap();
+        assert_eq!(
+            read_glab_config(&[dir.join("absent.yml"), second])
+                .unwrap()
+                .as_deref(),
+            Some(YAML.as_bytes())
+        );
+        assert_eq!(read_glab_config(&[dir.join("absent.yml")]).unwrap(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_glab_config_that_is_there_and_cannot_be_read_fails_before_the_next_candidate() {
+        let dir =
+            std::env::temp_dir().join(format!("gltree-glab-config-first-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = dir.join("first.yml");
+        std::fs::create_dir_all(&first).unwrap();
+        let second = dir.join("second.yml");
+        std::fs::write(&second, YAML).unwrap();
+        let e = read_glab_config(&[first.clone(), second]).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            e.to_string().starts_with(&format!(
+                "cannot read the glab config {}: ",
+                first.display()
+            )),
+            "{e}"
+        );
     }
 
     #[test]

@@ -40,7 +40,7 @@ already says the server refused (`answer`, tested with a 502 HTML body).
 
 ## Territories it holds in
 - [keeping-a-snapshot](keeping-a-snapshot.md) — `SnapshotFile::parse`: `the snapshot file is malformed: …`; a file that cannot be read is `cannot read the snapshot file <path>: …` (`Tracker for SnapshotFile`).
-- [reading-the-server](reading-the-server.md) — `login`: `the glab config is malformed: …` and `cannot read the glab login: no token …`; `GitLab::new` and `macos_tls`: `cannot read the CA certificate <path>: …` for a file that will not open, `the CA certificate <path> is malformed: …` for one with no PEM certificate (`ca_name` in `src/gitlab.rs` builds the name for both files); `Remote::of_clone`: ``cannot read git's `origin` remote: …`` when git fails, ``git's `origin` remote is malformed: …`` for a URL with no project path; `call`, `parse_level`, `parse_page`, `brief` and `macos_tls::agent`: `cannot read the tracker: …` (`TRACKER` in `src/gitlab.rs`) for the network, a project the token cannot see, a connection longer than one page, and a rustls setup failure; `parse_comments`, `all_comments`, `brief`, `link_id`, `created` and `answer`: `the server's answer is malformed: …` (`ANSWER`), the reason naming the item or the field missing.
+- [reading-the-server](reading-the-server.md) — `read_glab_config`: `cannot read the glab config <path>: …` for a config that is there and cannot be read (a directory, no permission); `login`: `the glab config is malformed: …`, bytes that are not UTF-8 included, and `cannot read the glab login: no token …`; `GitLab::new` and `macos_tls`: `cannot read the CA certificate <path>: …` for a file that will not open, `the CA certificate <path> is malformed: …` for one with no PEM certificate (`ca_name` in `src/gitlab.rs` builds the name for both files); `Remote::of_clone`: ``cannot read git's `origin` remote: …`` when git fails, ``git's `origin` remote is malformed: …`` for a URL with no project path; `call`, `parse_level`, `parse_page`, `brief` and `macos_tls::agent`: `cannot read the tracker: …` (`TRACKER` in `src/gitlab.rs`) for the network, a project the token cannot see, a connection longer than one page, and a rustls setup failure; `parse_comments`, `all_comments`, `brief`, `link_id`, `created` and `answer`: `the server's answer is malformed: …` (`ANSWER`), the reason naming the item or the field missing.
 - [the-command-line-contract](the-command-line-contract.md) — `current_dir` in `src/main.rs`: `cannot read the current directory: …`, for `server` and `run`.
 - [migrating-a-tracker](migrating-a-tracker.md) — `plan`: `#N's description is malformed: …` when `header::with_header` refuses the body under an old head.
 - [reading-the-repo-config](reading-the-repo-config.md) — the config has its own `config::Error`, printed `.gltree.toml: <reason>`.
@@ -54,6 +54,7 @@ for a login gltree never reached the tracker with.
 - Commit c80e895 (#29, 2026-11-20): the repo config got its own error type.
 - #29 follow-up (2026-11-20): `Malformed` took `what`, and this note was written as one fact across the sites.
 - #29 second follow-up (2026-11-20): `Source` took `what` too, `main` names the current directory, and the three unreadable answer sites became `Malformed`.
+- #29 third follow-up (2026-11-20): a glab config that is there and cannot be read fails naming it, rather than reading as absent and then as holding no token.
 
 ## Where it will recur
 A new `Error::malformed` or `Error::unreadable` site names what it read in `what`; an answer is a refusal only when the server says so. A new file or answer gltree reads takes a
@@ -61,11 +62,9 @@ name of its own, never one already used for another source; a new kind of input 
 takes its own error type, as `config::Error` does.
 
 ## Known holes / open
-- An existing glab config gltree cannot read (a directory, not UTF-8, no permission) is skipped by
-  `server` in `src/main.rs` (`read_to_string(p).ok()`), so the error is
-  `cannot read the glab login: no token for <host>: glab's config file holds none …`, the same text as
-  when no config exists; `config.rs` treats only `NotFound` as absent (reproduced with a directory
-  and a `\xff\xfe` file as `config.yml`, 2026-11-20). Not changed here.
+- `the glab config is malformed: …` names no path, while `cannot read the glab config <path>: …` does;
+  with two candidates (Windows, macOS) the reader cannot tell which file to open (`login` is given
+  the bytes, not the path). Not changed here.
 - `Remote::of_clone` reports every failing `git remote get-url origin` as "there is none here" and
   drops git's stderr, so a broken `.git/config` on a clone with an origin reads as no origin
   (reproduced, 2026-11-20). Not changed here.
