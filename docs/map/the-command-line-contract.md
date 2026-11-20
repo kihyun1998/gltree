@@ -12,7 +12,7 @@ implementation, which is why its output is what callers read; it does not decide
 ## Design model
 - **Exit status**: 0 on success; 1 when `check` finds anything; 2 on a usage, input, config or server
   error, and on a write left `Unfinished` (`main`, `run`).
-- **The source**: every read command takes `--snapshot F` instead of the server (`source`); `tree N`
+- **The source**: `tree`, `roots`, `check`, `show`, `migrate` and `serve` take `--snapshot F` instead of the server (`source`); `sync --dry-run` and `snapshot` always read the server; `tree N`
   without it walks, `tree` without a number reads every item. `serve` takes it too, and its refresh reads the file again.
 - **`tree` without a number leaves out families whose every item is closed**; `--all` draws every
   family and is a usage error (exit 2) beside a number. Leaving families out gives fewer `roots`, not
@@ -25,6 +25,25 @@ implementation, which is why its output is what callers read; it does not decide
   2 with no address printed. Its four routes and their JSON are in
   [serving-the-viewer](serving-the-viewer.md).
 - **Item numbers** are accepted as `N` or `#N` (`parse_iid`).
+- **The help is the first-time user's manual** (#34): `-h` gives each command's one-line `about` and
+  every option's short `help`; `--help` adds the `long_about`, each option's `long_help` where the
+  detail does not fit, and an `after_long_help` holding Examples, Output, Requirements and Exit
+  status. The Requirements and Exit status paragraphs are `macro_rules!` literals in `main.rs`
+  (`requires_clone`, `reads_a_snapshot`, `reads_the_whole_tracker`, `writes_need_the_config`,
+  `reads_the_config`, `exit_status`, `exit_status_of_a_write`), since `concat!` takes literals
+  only; `check` and `serve` state their own exit status, and a few command-specific lines sit beside
+  the macros. `exit_status_of_a_write` goes on the commands that return `Error::Unfinished`
+  (`new`, `edit`, `move`, `migrate`), not on `sync`, whose failed write is a plain error.
+  clap here has no `wrap_help` feature, so every rendered help line but an example is kept within
+  80 columns by hand. The help says "item", as GLOSSARY.md does, and glosses header, family, state
+  policy and `[extra]` where a command's help uses them. `bin_name = "gltree"` keeps the usage line
+  from naming `gltree.exe` on Windows (clap takes argv[0] only when `bin_name` is unset).
+- **`--snapshot` outside a clone runs with the default repo config**, as [reading-the-repo-config](reading-the-repo-config.md) says; the help tells people to run it in the clone all the same.
+- **Tests that hold the help**: every command has an about, a long description, the four sections
+  and at least two examples that parse with clap, and every argument a help line
+  (`every_command_explains_itself_with_examples_that_parse`); every line but an example fits 80
+  columns (`every_help_line_but_an_example_fits_80_columns`); `tests/cli.rs` reads `--help` and `-h`
+  for every command.
 - **What callers are known to read** (read in the callers, 2026-11-19; not named here, maintainer,
   2026-11-19): consuming repositories commit `.gltree.toml` with `state_policy` and `extra_keys` and
   state a minimum gltree version beside it; their docs tell people to create and change items only
@@ -35,6 +54,7 @@ implementation, which is why its output is what callers read; it does not decide
 
 ## Code
 - `src/main.rs — Cli, Command, parse_iid, parse_extra, unreadable_dir, current_dir, server, source, main, run`
+- `src/main.rs — tests::every_command_explains_itself_with_examples_that_parse, tests::every_help_line_but_an_example_fits_80_columns, tests::the_usage_line_names_gltree_on_every_platform`
 - `tests/cli.rs`
 - `README.md` (the user-facing shapes)
 

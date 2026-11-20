@@ -11,7 +11,10 @@ its own first-line words, and the badges `serve` shows.
 
 ## Design model
 - Found at `git rev-parse --show-toplevel` of the working directory; outside a clone, or with no file,
-  the defaults with `present = false`. Source: `RepoConfig::of_clone`, `toplevel`.
+  the defaults with `present = false`. Source: `RepoConfig::of_clone`, `toplevel`. So a `--snapshot`
+  read outside a clone judges with no `extra_keys`, `old_head_keys`, state policy or badges:
+  `check --snapshot tests/fixtures/tracker.json` there adds a `header` finding for #5's `[extra] marker`
+  (proving run for #34, 2026-11-20).
 - **`present` is the opt-in.** `new`, `edit`, `move`, `migrate --apply` and `sync` without
   `--dry-run` refuse without it (`write::require_opt_in`), before any login, since `main` calls it
   before `server()`. Reading never needs it.

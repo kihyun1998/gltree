@@ -1113,3 +1113,51 @@ fn serve_with_a_snapshot_it_cannot_read_stops_before_printing_an_address() {
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("none.json"));
 }
+
+fn help_text(args: &[&str]) -> String {
+    let out = gltree(args);
+    assert_eq!(out.status.code(), Some(0), "{args:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn long_help_carries_examples_requirements_and_exit_status_and_short_help_stays_short() {
+    for cmd in [
+        "tree", "check", "new", "edit", "move", "roots", "migrate", "sync", "show", "snapshot",
+        "serve",
+    ] {
+        let long = help_text(&[cmd, "--help"]);
+        let short = help_text(&[cmd, "-h"]);
+        for heading in ["Examples:", "Requirements:", "Exit status:", "Output:"] {
+            assert!(
+                long.contains(heading),
+                "{cmd} --help lacks {heading}\n{long}"
+            );
+        }
+        assert!(long.contains(&format!("gltree {cmd}")), "{cmd}\n{long}");
+        assert!(!long.contains("gltree.exe"), "{cmd}\n{long}");
+        assert!(long.contains("glab"), "{cmd}: the login\n{long}");
+        assert!(!short.contains("Examples:"), "{cmd} -h\n{short}");
+        assert!(short.len() < long.len() / 2, "{cmd}: -h is not short");
+    }
+    for cmd in ["new", "edit", "move", "sync"] {
+        let long = help_text(&[cmd, "--help"]);
+        assert!(long.contains(".gltree.toml"), "{cmd}\n{long}");
+    }
+    assert!(help_text(&["check", "--help"]).contains("1 when it finds anything"));
+}
+
+#[test]
+fn top_level_help_says_where_it_runs_and_where_to_read_more() {
+    let long = help_text(&["--help"]);
+    for needle in [
+        "clone",
+        "origin",
+        "glab auth login",
+        ".gltree.toml",
+        "gltree <command> --help",
+    ] {
+        assert!(long.contains(needle), "{needle}\n{long}");
+    }
+    assert!(help_text(&["-h"]).len() < long.len());
+}
