@@ -10,7 +10,8 @@ a person reads during an outage or as JSON.
 ## Design model
 - **From the server** it reads one item with its own query (`item_query_with_comments`), since
   `level` brings no labels; it does not ask for links, which it does not print, so more than 100 links
-  does not stop it (`read_item_with_comments` sets `links` to `None`).
+  does not stop it (`read_item_with_comments` sets `links` to `None`); more than 100 labels does
+  ([reading-the-server](reading-the-server.md)).
 - **The text cannot be forged by what it prints**: gltree's own lines sit at the margin and what people
   wrote is indented, with control characters taken out (a tab stays), so a body cannot pass for a
   comment head and its `[internal]` mark, and cannot drive the terminal. Source: `clean`, `body_lines`,
@@ -32,6 +33,7 @@ a person reads during an outage or as JSON.
 **None.**
 
 ## Cross-cutting invariants
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every comment is followed; more than 100 labels fails the read.
 - [Not recorded is not none](not-recorded-is-not-none.md) — the two comment lines.
 
 ## Blast radius

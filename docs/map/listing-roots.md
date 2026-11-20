@@ -37,6 +37,7 @@ finished features.
 **None.**
 
 ## Cross-cutting invariants
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — the label filters read every label, or the read fails.
 - [Not recorded is not none](not-recorded-is-not-none.md) — a closed item without `closed_at` stops a date filter.
 
 ## Blast radius

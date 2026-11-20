@@ -40,7 +40,8 @@ snapshot), one finding per break, in a fixed order; exit 1 when there is any.
 - **Cycles**: `blocker-cycle` when following `blocked_by` comes back to the item; `cycle` when
   following parents up does, so an item under a loop is reported with the loop's members.
 - **The full read** is paged GraphQL, 100 items a page, with type, labels and link ends; an item
-  whose links overflow one page fails the read, since `unlinked` needs every link
+  whose links overflow one page fails the read, since `unlinked` needs every link, and so does one
+  whose labels overflow one page
   ([reading-the-server](reading-the-server.md), `parse_page`).
 - **Tests**: `tests/golden/check.txt` against `tests/fixtures/tracker.json` (`tests/cli.rs`), run in a
   clone whose `.gltree.toml` declares `marker` (`clone_declaring_extra_marker`): fixture #5 holds
@@ -60,6 +61,7 @@ snapshot), one finding per break, in a fixed order; exit 1 when there is any.
   commit 6be32e0, 2026-10-22). It is no longer a reference: nothing is left to compare against.
 
 ## Cross-cutting invariants
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every link of every item, or the read fails.
 - [Every reference has a link](every-reference-has-a-link.md) — `unlinked` and `stray-link` are its check.
 - [Not recorded is not none](not-recorded-is-not-none.md) — `links: None` silences the link findings.
 

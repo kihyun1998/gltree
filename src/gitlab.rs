@@ -265,10 +265,10 @@ pub fn level_query(project: &str, iids: &[u64]) -> String {
     format!(
         "query{{project(fullPath:{project}){{workItems(iids:[{iids}],first:{LEVEL_BATCH}){{nodes{{iid title state webUrl widgets{{\
          ... on WorkItemWidgetDescription{{description}} \
-         ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}} \
+         {LABELS_FRAGMENT} \
          ... on WorkItemWidgetLinkedItems{{linkedItems(first:100){{pageInfo{{hasNextPage}} nodes{{workItem{{\
          iid title state webUrl widgets{{... on WorkItemWidgetDescription{{description}} \
-         ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}}}}}}}}}}}}}}}}}}}}}",
+         {LABELS_FRAGMENT}}}}}}}}}}}}}}}}}}}}}",
         project = Value::String(project.into())
     )
 }
@@ -347,9 +347,12 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
 /// The fields of an item, with `widgets` extended by `extra`.
 fn item_fields(extra: &str) -> String {
     format!(
-        "iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          ... on WorkItemWidgetLabels{{labels{{nodes{{title}}}}}}{extra}}}"
+        "iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          {LABELS_FRAGMENT}{extra}}}"
     )
 }
+
+const LABELS_FRAGMENT: &str =
+    "... on WorkItemWidgetLabels{labels(first:100){pageInfo{hasNextPage} nodes{title}}}";
 
 const LINKS_FRAGMENT: &str = "          ... on WorkItemWidgetLinkedItems{linkedItems(first:100){pageInfo{hasNextPage} nodes{workItem{iid}}}}";
 
@@ -596,9 +599,18 @@ fn brief(n: &Value) -> Result<Item, Error> {
         .unwrap_or("");
     let mut item = Item::new(iid, state, title, desc);
     item.url = n["webUrl"].as_str().map(String::from);
-    item.labels = widgets
+    let labels: Vec<&Value> = widgets.iter().filter_map(|w| w.get("labels")).collect();
+    if labels
         .iter()
-        .filter_map(|w| w.pointer("/labels/nodes").and_then(Value::as_array))
+        .any(|l| l.pointer("/pageInfo/hasNextPage").and_then(Value::as_bool) == Some(true))
+    {
+        return Err(Error::Source(format!(
+            "#{iid} has more than 100 labels; gltree cannot read them all"
+        )));
+    }
+    item.labels = labels
+        .iter()
+        .filter_map(|l| l["nodes"].as_array())
         .flatten()
         .filter_map(|l| l["title"].as_str().map(String::from))
         .collect();
@@ -1062,10 +1074,111 @@ mod tests {
         for part in [own, linked] {
             assert!(part.contains("webUrl"), "{part}");
             assert!(
-                part.contains("... on WorkItemWidgetLabels{labels{nodes{title}}}"),
+                part.contains(
+                    "... on WorkItemWidgetLabels{labels(first:100){pageInfo{hasNextPage} nodes{title}}}"
+                ),
                 "{part}"
             );
         }
+    }
+
+    #[test]
+    fn every_read_of_labels_asks_one_page_of_100_and_whether_there_is_more() {
+        for q in [
+            level_query("team/app", &[3]),
+            page_query("team/app", None),
+            page_query_with_comments("team/app", None),
+            item_query_with_comments("team/app", 5),
+        ] {
+            let asked = q.matches("labels").count();
+            assert!(asked > 0, "{q}");
+            assert_eq!(
+                q.matches("labels(first:100){pageInfo{hasNextPage} nodes{title}}")
+                    .count(),
+                asked,
+                "{q}"
+            );
+            assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+        }
+    }
+
+    fn labels_widget(titles: &[&str], more: bool) -> Value {
+        json!({ "labels": { "pageInfo": { "hasNextPage": more },
+            "nodes": titles.iter().map(|t| json!({ "title": t })).collect::<Vec<_>>() } })
+    }
+
+    fn names_too_many_labels(got: Result<impl std::fmt::Debug, Error>, iid: u64) {
+        match got {
+            Err(Error::Source(m)) => assert!(
+                m.starts_with(&format!("#{iid} has more than 100 labels")),
+                "{m}"
+            ),
+            other => panic!("expected #{iid}'s labels to overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_level_item_with_more_labels_than_one_page_is_an_error_naming_it() {
+        let mut top = wi(3, "OPEN", "", Some((vec![], false)));
+        top["widgets"]
+            .as_array_mut()
+            .unwrap()
+            .push(labels_widget(&["SPEC"], true));
+        names_too_many_labels(parse_level(&level_answer(vec![top])), 3);
+    }
+
+    #[test]
+    fn a_linked_item_with_more_labels_than_one_page_is_an_error_naming_it() {
+        let mut child = wi(5, "OPEN", "", None);
+        child["widgets"]
+            .as_array_mut()
+            .unwrap()
+            .push(labels_widget(&["bug"], true));
+        let mut top = wi(3, "OPEN", "", None);
+        top["widgets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "linkedItems": {
+            "pageInfo": { "hasNextPage": false }, "nodes": [{ "workItem": child }] } }));
+        names_too_many_labels(parse_level(&level_answer(vec![top])), 5);
+    }
+
+    #[test]
+    fn a_page_item_with_more_labels_than_one_page_is_an_error_naming_it() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![
+                    full_node(1, vec![labels_widget(&["SPEC"], false)]),
+                    full_node(2, vec![labels_widget(&["bug"], true)]),
+                ],
+                None,
+            )],
+            &asked,
+        );
+        names_too_many_labels(read_items_with_comments("team/app", &mut ask), 2);
+        let (items, _) = parse_page(&page(
+            vec![full_node(1, vec![labels_widget(&["SPEC", "bug"], false)])],
+            None,
+        ))
+        .unwrap();
+        assert_eq!(items[0].labels, ["SPEC", "bug"]);
+    }
+
+    #[test]
+    fn one_item_with_more_labels_than_one_page_is_an_error_naming_it() {
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(
+                    5,
+                    vec![labels_widget(&["SPEC"], true), notes_widget(vec![], None)],
+                )],
+                None,
+            )],
+            &asked,
+        );
+        names_too_many_labels(read_item_with_comments("team/app", 5, &mut ask), 5);
     }
 
     #[test]

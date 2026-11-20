@@ -127,6 +127,7 @@ reasons below.
 **None.**
 
 ## Cross-cutting invariants
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — the badges read every label, or the read fails.
 - [One rule for a finished family](one-rule-for-a-finished-family.md) — the page's `finished` is a copy of `tree::with_open_work`.
 - [Not recorded is not none](not-recorded-is-not-none.md) — `labels` read as `[]` from an old snapshot gives every closed root `missing`.
 

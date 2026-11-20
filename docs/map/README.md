@@ -29,6 +29,7 @@ A linked note graph of what gltree does. It answers two questions before a chang
 
 ## Invariants
 - [Every reference has a link, and every link has a reference](every-reference-has-a-link.md)
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md)
 - [Not recorded is not none](not-recorded-is-not-none.md)
 - [One rule for a finished family](one-rule-for-a-finished-family.md)
 

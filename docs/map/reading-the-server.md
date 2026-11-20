@@ -25,9 +25,19 @@ the walk this adapter serves, not the adapter.
   is an error, since a short tree would look complete. It asks `webUrl` and labels for each item and
   each linked item, so a walked tree carries them as a snapshot's does (#26); `brief` reads both, for
   `level` and `all_items` alike. `level` is one query for every caller: the walk, `live_tree`'s
-  blockers, and `new`, `edit`, `move` and `sync`, so its cost is theirs too. `all_items` pages 100 at a time with links,
-  labels, type, `closedAt` and `webUrl`. Comments have reads of their own
-  ([keeping-a-snapshot](keeping-a-snapshot.md)).
+  blockers, and `new`, `edit`, `move` and `sync`, so its cost and its failures are theirs too.
+  `all_items` pages 100 at a time with links, labels, type, `closedAt` and `webUrl`. Comments have
+  reads of their own ([keeping-a-snapshot](keeping-a-snapshot.md)).
+- **Labels** are asked as one page, `labels(first:100){pageInfo{hasNextPage} nodes{title}}`, in every
+  query that reads them (`LABELS_FRAGMENT`: `level_query` for each item and each linked item,
+  `page_query`, `page_query_with_comments`, `item_query_with_comments`). An item whose labels say
+  `hasNextPage` fails the read naming it, checked in `brief`, which every one of them reaches: a short
+  label list would show a decided root as `missing` in `serve`'s badges (#28). They are not paged to
+  the end: failing loudly is the maintainer's call (maintainer, 2026-11-20). So one item over 100
+  labels stops every command that reads it, a write through `level` and `check` included (reading,
+  2026-11-20). 100 follows `linkedItems(first:100)`, the precedent for a
+  connection that is read whole or not at all; the server's default page size for this connection,
+  used when `first` is left out, is not verified.
 - **Writes** are REST under `api/v4/projects/<url-encoded path>`: `POST issues`, `PUT issues/:iid`,
   `POST issues/:a/links` with `relates_to` (409, already linked, is success), and for an unlink the
   link id from `GET issues/:a/links` then `DELETE` (no link is success). A create is judged by its
@@ -68,17 +78,24 @@ the walk this adapter serves, not the adapter.
 - The issue search API is rate-limited ("requested with the search argument too many times") and
   matches text anywhere in a body; the walk does not use it
   ([ADR-0001](../adr/0001-the-child-records-its-parent-and-links-are-the-way-down.md)).
+- `WorkItemWidgetLabels.labels` is a `LabelConnection` taking `before`, `after`, `first`, `last`: the
+  GitLab GraphQL reference (`doc/api/graphql/reference/objects.md`, gitlab-org/gitlab master, raw,
+  read 2026-11-20); the self-hosted server's own version was not read.
 - The GraphQL complexity cap on a self-hosted CE is 250; the level query with 100 items fits
   (commit 2bcb3f2, 2026-10-21). With `webUrl` and labels added for each item and each linked item,
   the same 100 × 100 query was accepted by a self-hosted CE, and the root it read came back with its
-  `url`, `labels` and `extra` filled (one read-only run, 2026-11-19).
+  `url`, `labels` and `extra` filled (one read-only run, 2026-11-19). That run asked labels without a
+  page; the paged selection (#28) has not been run against a server here.
 
 ## Cross-cutting invariants
 - [Not recorded is not none](not-recorded-is-not-none.md) — `parse_page` records links, `brief` and `read_item_with_comments` leave them `None`.
+- [A paged read is whole or fails](a-paged-read-is-whole-or-fails.md) — every connection gltree asks is followed to its end or fails naming the item.
 
 ## Blast radius
 - [drawing-a-tree](drawing-a-tree.md) — the walk assumes `level` returns every linked item or fails; a silently short page draws a short tree as complete.
 - [checking-the-tracker](checking-the-tracker.md) — `unlinked` and `stray-link` assume `all_items` records every link.
+- [listing-roots](listing-roots.md) — `--label` and `--without-label` assume an item's labels are all of them; a short list would let a registered root through `--without-label`.
+- [serving-the-viewer](serving-the-viewer.md) — the badges assume an item's labels are all of them; `brief` fails rather than return a first page alone.
 - [writing-the-tree](writing-the-tree.md) — the write steps assume 409 means linked and a missing link on unlink is success, so a rerun is safe.
 - [keeping-a-snapshot](keeping-a-snapshot.md) — the snapshot is `Item` as this adapter fills it; a field read here and not saved is lost to every `--snapshot` reader.
 
