@@ -10,22 +10,29 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The version of the JSON shapes this module answers with, besides `/api/tree`'s, which is `tree`'s.
-pub const JSON_VERSION: u32 = 1;
+pub const JSON_VERSION: u32 = 2;
 pub const DEFAULT_PORT: u16 = 7420;
 const PAGE: &str = include_str!("serve.html");
 const HEAD_LIMIT: usize = 16 * 1024;
 const BODY_LIMIT: u64 = 64 * 1024;
 
-/// Opens the tracker for one read; called once per request that reads it.
-pub type Open = Box<dyn Fn() -> Result<Box<dyn Tracker>, Error> + Send + Sync>;
+/// Opens the tracker for one read; called once per read after the first, which reads the tracker
+/// handed to `App::start`.
+pub type Open = Box<dyn Fn() -> Result<Box<dyn Tracker + Send>, Error> + Send + Sync>;
 
 pub struct App {
     open: Open,
     walk: bool,
     config: RepoConfig,
     port: u16,
-    families: Mutex<Value>,
-    reading: Mutex<()>,
+    kept: Mutex<Kept>,
+}
+
+#[derive(Default)]
+struct Kept {
+    reading: bool,
+    read: Option<(String, Value)>,
+    failed: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -93,35 +100,116 @@ struct Response {
 }
 
 impl App {
-    /// An app with nothing read yet; `refresh` makes the first read.
+    /// An app with nothing read yet; `start` makes the first read.
     pub fn new(open: Open, walk: bool, config: RepoConfig, port: u16) -> App {
         App {
             open,
             walk,
             config,
             port,
-            families: Mutex::new(Value::Null),
-            reading: Mutex::new(()),
+            kept: Mutex::new(Kept::default()),
         }
     }
 
-    /// Reads every family again and keeps the answer `/api/families` gives.
-    pub fn refresh(&self) -> Result<Value, Error> {
-        let _one_at_a_time = self.reading.lock().unwrap_or_else(|p| p.into_inner());
-        let tracker = (self.open)()?;
-        let nodes = tree::tree(tracker.as_ref(), self.config.scheme().as_ref(), None)?;
-        let v = json!({
-            "version": JSON_VERSION,
-            "read_at": utc(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()),
-            "badges": self.config.badges,
-            "tree": tree::to_json(&nodes),
-        });
-        *self.families() = v.clone();
-        Ok(v)
+    /// Starts the first full read of `first` on its own thread and returns at once;
+    /// `/api/families` answers `reading` until it ends. `report` gets the number of families read,
+    /// or the error.
+    pub fn start(
+        self: &Arc<Self>,
+        first: Box<dyn Tracker + Send>,
+        report: impl FnOnce(Result<usize, Error>) + Send + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let begun = self.begin();
+        let app = Arc::clone(self);
+        std::thread::spawn(move || {
+            if begun {
+                report(app.finish(Some(first)));
+            }
+        })
     }
 
-    fn families(&self) -> std::sync::MutexGuard<'_, Value> {
-        self.families.lock().unwrap_or_else(|p| p.into_inner())
+    fn refresh(&self) -> Result<Value, Error> {
+        if self.begin() {
+            self.finish(None)?;
+        }
+        Ok(self.families())
+    }
+
+    fn begin(&self) -> bool {
+        let mut kept = self.kept();
+        !std::mem::replace(&mut kept.reading, true)
+    }
+
+    fn finish(&self, first: Option<Box<dyn Tracker + Send>>) -> Result<usize, Error> {
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read_all(first)))
+            .unwrap_or_else(|panic| {
+                let why = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                Err(Error::unreadable(
+                    "the tracker",
+                    format!("the read stopped on a bug in gltree: {why}"),
+                ))
+            });
+        let mut kept = self.kept();
+        kept.reading = false;
+        match read {
+            Ok(tree) => {
+                let families = tree["roots"].as_array().map_or(0, Vec::len);
+                let at = utc(SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs());
+                kept.read = Some((at, tree));
+                kept.failed = None;
+                Ok(families)
+            }
+            Err(e) => {
+                kept.failed = Some(e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    fn read_all(&self, first: Option<Box<dyn Tracker + Send>>) -> Result<Value, Error> {
+        let tracker = match first {
+            Some(t) => t,
+            None => (self.open)()?,
+        };
+        let nodes = tree::tree(tracker.as_ref(), self.config.scheme().as_ref(), None)?;
+        Ok(tree::to_json(&nodes))
+    }
+
+    fn kept(&self) -> std::sync::MutexGuard<'_, Kept> {
+        self.kept.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn families(&self) -> Value {
+        self.families_of(&self.kept())
+    }
+
+    fn families_of(&self, kept: &Kept) -> Value {
+        let state = match (kept.reading, &kept.failed, &kept.read) {
+            (false, Some(_), _) => "failed",
+            (false, None, Some(_)) => "ready",
+            _ => "reading",
+        };
+        let (read_at, tree) = kept
+            .read
+            .as_ref()
+            .map_or((Value::Null, Value::Null), |(at, tree)| {
+                (json!(at), tree.clone())
+            });
+        json!({
+            "version": JSON_VERSION,
+            "state": state,
+            "error": if state == "failed" { json!(kept.failed) } else { Value::Null },
+            "read_at": read_at,
+            "badges": self.config.badges,
+            "tree": tree,
+        })
     }
 
     fn tree_of(&self, n: u64) -> Result<Value, Error> {
@@ -388,7 +476,8 @@ mod tests {
         }];
         let reads = Arc::clone(&held);
         let open: Open = Box::new(move || {
-            Ok(Box::new(FakeTracker::new(reads.lock().unwrap().clone())) as Box<dyn Tracker>)
+            Ok(Box::new(FakeTracker::new(reads.lock().unwrap().clone()))
+                as Box<dyn Tracker + Send>)
         });
         App::new(open, false, config, 7420)
     }
@@ -423,7 +512,7 @@ mod tests {
         let r = a.handle(&get("GET", "/api/families"));
         assert_eq!((r.status.code(), r.content_type), (200, "application/json"));
         let v = body(&r);
-        assert_eq!(v["version"], 1);
+        assert_eq!((&v["version"], &v["state"]), (&json!(2), &json!("ready")));
         assert_eq!(v["tree"]["version"], 3);
         assert_eq!(numbers(&v), [1, 3]);
         assert_eq!(
@@ -579,7 +668,7 @@ mod tests {
             let open: Open = Box::new(|| {
                 let fake = FakeTracker::new(items());
                 fake.fail_all_items.set(true);
-                Ok(Box::new(fake) as Box<dyn Tracker>)
+                Ok(Box::new(fake) as Box<dyn Tracker + Send>)
             });
             App::new(open, walk, RepoConfig::defaults(), 7420).handle(&get("GET", "/api/tree/1"))
         };
@@ -682,36 +771,346 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_refresh_that_finishes_late_does_not_put_back_an_older_read() {
-        let calls = Arc::new(Mutex::new(0u32));
-        let counted = Arc::clone(&calls);
-        let open: Open = Box::new(move || {
-            let n = {
-                let mut c = counted.lock().unwrap();
-                *c += 1;
-                *c
-            };
-            let mut held = items();
-            if n == 1 {
-                std::thread::sleep(Duration::from_millis(300));
-            } else {
-                held.push(Item::new(9, State::Open, "new", ""));
+    #[derive(Default)]
+    struct Gate {
+        open: Mutex<bool>,
+        moved: std::sync::Condvar,
+    }
+
+    impl Gate {
+        fn set(&self, open: bool) {
+            *self.open.lock().unwrap() = open;
+            self.moved.notify_all();
+        }
+
+        fn pass(&self) {
+            let mut open = self.open.lock().unwrap();
+            while !*open {
+                open = self.moved.wait(open).unwrap();
             }
-            Ok(Box::new(crate::tracker::FakeTracker::new(held)) as Box<dyn Tracker>)
-        });
-        let a = Arc::new(App::new(open, false, RepoConfig::defaults(), 7420));
-        let first = {
-            let a = Arc::clone(&a);
-            std::thread::spawn(move || a.refresh().unwrap())
-        };
-        std::thread::sleep(Duration::from_millis(50));
-        a.refresh().unwrap();
-        first.join().unwrap();
+        }
+    }
+
+    struct Held {
+        inner: FakeTracker,
+        gate: Arc<Gate>,
+        reads: Arc<std::sync::atomic::AtomicU32>,
+        fail: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Tracker for Held {
+        fn all_items(&self) -> Result<Vec<Item>, Error> {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.reads.fetch_add(1, SeqCst);
+            self.gate.pass();
+            if self.fail.load(SeqCst) {
+                return Err(Error::unreadable("the tracker", "the network is down"));
+            }
+            self.inner.all_items()
+        }
+        fn item_with_comments(&self, iid: u64) -> Result<Item, Error> {
+            self.inner.item_with_comments(iid)
+        }
+        fn level(
+            &self,
+            iids: &[u64],
+        ) -> Result<std::collections::HashMap<u64, crate::tracker::Linked>, Error> {
+            self.inner.level(iids)
+        }
+        fn create_item(
+            &self,
+            t: &str,
+            d: &str,
+            l: &[String],
+        ) -> Result<crate::tracker::Created, Error> {
+            self.inner.create_item(t, d, l)
+        }
+        fn add_link(&self, a: u64, b: u64) -> Result<(), Error> {
+            self.inner.add_link(a, b)
+        }
+        fn set_desc(&self, iid: u64, desc: &str) -> Result<(), Error> {
+            self.inner.set_desc(iid, desc)
+        }
+        fn remove_link(&self, a: u64, b: u64) -> Result<(), Error> {
+            self.inner.remove_link(a, b)
+        }
+    }
+
+    struct Staged {
+        app: Arc<App>,
+        gate: Arc<Gate>,
+        reads: Arc<std::sync::atomic::AtomicU32>,
+        fail: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Staged {
+        fn new(open: bool, fail: bool) -> Staged {
+            let gate = Arc::new(Gate::default());
+            gate.set(open);
+            let reads = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let fail = Arc::new(std::sync::atomic::AtomicBool::new(fail));
+            let (g, r, f) = (Arc::clone(&gate), Arc::clone(&reads), Arc::clone(&fail));
+            let open: Open = Box::new(move || {
+                Ok(Box::new(Held {
+                    inner: FakeTracker::new(items()),
+                    gate: Arc::clone(&g),
+                    reads: Arc::clone(&r),
+                    fail: Arc::clone(&f),
+                }) as Box<dyn Tracker + Send>)
+            });
+            Staged {
+                app: Arc::new(App::new(open, true, RepoConfig::defaults(), 7420)),
+                gate,
+                reads,
+                fail,
+            }
+        }
+
+        fn held(&self) -> Box<dyn Tracker + Send> {
+            Box::new(Held {
+                inner: FakeTracker::new(items()),
+                gate: Arc::clone(&self.gate),
+                reads: Arc::clone(&self.reads),
+                fail: Arc::clone(&self.fail),
+            })
+        }
+
+        fn reads(&self) -> u32 {
+            self.reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn wait_for_reads(&self, n: u32) {
+            let start = std::time::Instant::now();
+            while self.reads() < n {
+                assert!(
+                    start.elapsed() < Duration::from_secs(10),
+                    "no read reached the tracker"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn families(&self) -> Value {
+            body(&self.app.handle(&get("GET", "/api/families")))
+        }
+
+        fn refresh_while_held(&self) -> (Status, Value) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let app = Arc::clone(&self.app);
+            std::thread::spawn(move || {
+                let r = app.handle(&get("POST", "/api/refresh"));
+                let _ = tx.send((r.status, body(&r)));
+            });
+            rx.recv_timeout(Duration::from_secs(5))
+                .expect("a refresh during a read waited on a read of its own")
+        }
+
+        fn fail(&self, on: bool) {
+            self.fail.store(on, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn the_first_read_runs_behind_the_server_and_families_answer_reading_until_it_ends() {
+        let s = Staged::new(false, false);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (started, ran) = std::sync::mpsc::channel();
+        {
+            let app = Arc::clone(&s.app);
+            let first = s.held();
+            std::thread::spawn(move || {
+                let _ = started.send(app.start(first, move |r| {
+                    tx.send(r.map_err(|e| e.to_string())).unwrap()
+                }));
+            });
+        }
+        let first = ran
+            .recv_timeout(Duration::from_secs(5))
+            .expect("start waited for the first read to end");
+        let v = s.families();
         assert_eq!(
-            numbers(&body(&a.handle(&get("GET", "/api/families")))),
-            [1, 3, 9]
+            (
+                &v["version"],
+                &v["state"],
+                &v["tree"],
+                &v["read_at"],
+                &v["error"]
+            ),
+            (
+                &json!(2),
+                &json!("reading"),
+                &Value::Null,
+                &Value::Null,
+                &Value::Null
+            )
         );
+        s.wait_for_reads(1);
+        let t = s.app.handle(&get("GET", "/api/tree/1"));
+        assert_eq!(t.status, Status::Ok);
+        assert_eq!(body(&t)["roots"][0]["number"], 1);
+        let (status, r) = s.refresh_while_held();
+        assert_eq!((status, &r["state"]), (Status::Ok, &json!("reading")));
+        assert_eq!(
+            s.reads(),
+            1,
+            "a refresh during the first read started another"
+        );
+        assert!(rx.try_recv().is_err());
+        s.gate.set(true);
+        first.join().unwrap();
+        assert_eq!(rx.recv().unwrap(), Ok(2));
+        let v = s.families();
+        assert_eq!((&v["state"], &v["error"]), (&json!("ready"), &Value::Null));
+        assert_eq!(numbers(&v), [1, 3]);
+        assert!(v["read_at"].is_string());
+        assert_eq!(s.reads(), 1);
+    }
+
+    #[test]
+    fn a_failed_first_read_answers_failed_with_the_reason_and_a_refresh_reads_again() {
+        let s = Staged::new(true, true);
+        let (tx, rx) = std::sync::mpsc::channel();
+        s.app
+            .start(s.held(), move |r| {
+                tx.send(r.map_err(|e| e.to_string())).unwrap()
+            })
+            .join()
+            .unwrap();
+        let reported = rx.recv().unwrap().unwrap_err();
+        assert!(reported.contains("the network is down"), "{reported}");
+        let v = s.families();
+        assert_eq!(
+            (&v["version"], &v["state"], &v["tree"]),
+            (&json!(2), &json!("failed"), &Value::Null)
+        );
+        assert!(
+            v["error"].as_str().unwrap().contains("the network is down"),
+            "{v}"
+        );
+        s.fail(false);
+        s.gate.set(false);
+        let retry = {
+            let app = Arc::clone(&s.app);
+            std::thread::spawn(move || {
+                let r = app.handle(&get("POST", "/api/refresh"));
+                (r.status, body(&r)["state"].clone())
+            })
+        };
+        s.wait_for_reads(2);
+        let v = s.families();
+        assert_eq!(
+            (&v["state"], &v["error"], &v["tree"]),
+            (&json!("reading"), &Value::Null, &Value::Null)
+        );
+        s.gate.set(true);
+        assert_eq!(retry.join().unwrap(), (Status::Ok, json!("ready")));
+        assert_eq!(s.reads(), 2);
+        let v = s.families();
+        assert_eq!((&v["state"], &v["error"]), (&json!("ready"), &Value::Null));
+        assert_eq!(numbers(&v), [1, 3]);
+    }
+
+    #[test]
+    fn the_first_read_reads_the_tracker_it_is_given_and_opens_none() {
+        let open: Open = Box::new(|| panic!("the first read opened the tracker again"));
+        let a = Arc::new(App::new(open, true, RepoConfig::defaults(), 7420));
+        let (tx, rx) = std::sync::mpsc::channel();
+        a.start(Box::new(FakeTracker::new(items())), move |r| {
+            tx.send(r.map_err(|e| e.to_string())).unwrap()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(rx.recv().unwrap(), Ok(2));
+        let v = body(&a.handle(&get("GET", "/api/families")));
+        assert_eq!((&v["state"], numbers(&v)), (&json!("ready"), vec![1, 3]));
+    }
+
+    #[test]
+    fn a_read_that_panics_answers_failed_and_a_refresh_reads_again() {
+        let opens = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = Arc::clone(&opens);
+        let open: Open = Box::new(move || {
+            if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                panic!("a bug in the read");
+            }
+            Ok(Box::new(FakeTracker::new(items())) as Box<dyn Tracker + Send>)
+        });
+        let a = App::new(open, true, RepoConfig::defaults(), 7420);
+        let r = a.handle(&get("POST", "/api/refresh"));
+        assert_eq!(r.status, Status::BadGateway);
+        assert!(
+            body(&r)["error"]
+                .as_str()
+                .unwrap()
+                .contains("a bug in the read"),
+            "{}",
+            body(&r)
+        );
+        let v = body(&a.handle(&get("GET", "/api/families")));
+        assert_eq!(v["state"], "failed");
+        assert!(
+            v["error"].as_str().unwrap().contains("a bug in the read"),
+            "{v}"
+        );
+        let r = a.handle(&get("POST", "/api/refresh"));
+        assert_eq!(
+            (r.status, &body(&r)["state"]),
+            (Status::Ok, &json!("ready"))
+        );
+        assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_refresh_that_fails_keeps_the_last_read_and_families_say_it_failed() {
+        let s = Staged::new(true, false);
+        s.app.refresh().unwrap();
+        let at = s.families()["read_at"].clone();
+        s.fail(true);
+        let r = s.app.handle(&get("POST", "/api/refresh"));
+        assert_eq!(r.status, Status::BadGateway);
+        assert_eq!(body(&r)["version"], 2);
+        assert!(
+            body(&r)["error"]
+                .as_str()
+                .unwrap()
+                .contains("the network is down")
+        );
+        let v = s.families();
+        assert_eq!(v["state"], "failed");
+        assert!(
+            v["error"].as_str().unwrap().contains("the network is down"),
+            "{v}"
+        );
+        assert_eq!((numbers(&v), &v["read_at"]), (vec![1, 3], &at));
+    }
+
+    #[test]
+    fn during_a_later_refresh_families_keep_the_last_read_and_say_reading() {
+        let s = Staged::new(true, false);
+        s.app.refresh().unwrap();
+        s.gate.set(false);
+        let later = {
+            let app = Arc::clone(&s.app);
+            std::thread::spawn(move || {
+                app.refresh()
+                    .map(|v| v["state"].clone())
+                    .map_err(|e| e.to_string())
+            })
+        };
+        s.wait_for_reads(2);
+        let v = s.families();
+        assert_eq!(
+            (&v["state"], &v["error"]),
+            (&json!("reading"), &Value::Null)
+        );
+        assert_eq!(numbers(&v), [1, 3]);
+        let (status, r) = s.refresh_while_held();
+        assert_eq!((status, &r["state"]), (Status::Ok, &json!("reading")));
+        assert_eq!(numbers(&r), [1, 3]);
+        assert_eq!(s.reads(), 2);
+        s.gate.set(true);
+        assert_eq!(later.join().unwrap(), Ok(json!("ready")));
+        assert_eq!(s.families()["state"], "ready");
     }
 
     #[test]

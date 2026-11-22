@@ -38,7 +38,7 @@ the safe replace that `snapshot` and `migrate --out` share.
   not kept — the maintainer's call on #24; keeping it would take `ReplaceFileW` (commit 4cec8b2).
 
 ## Code
-- `src/snapshot.rs — SnapshotFile, SnapshotFile::to_bytes, SnapshotFile::parse, SnapshotFile::save, replace_file, Tracker for SnapshotFile`
+- `src/snapshot.rs — SnapshotFile, SnapshotFile::open, SnapshotFile::to_bytes, SnapshotFile::parse, SnapshotFile::save, replace_file, Tracker for SnapshotFile`
 - `src/gitlab.rs — GitLab::items_with_comments, read_items_with_comments, read_item_with_comments, all_comments, parse_comments, notes_fragment, page_query_with_comments, item_query_with_comments, comments_query`
 - `src/item.rs — Item, Comment`
 - `src/main.rs — Command::Snapshot`

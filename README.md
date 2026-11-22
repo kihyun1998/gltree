@@ -270,8 +270,14 @@ gltree serve --snapshot tracker.json     # from a file; refresh reads the file a
 gltree serve --port 0                    # a free port
 ```
 
-Starts a local web server on `127.0.0.1` only, reads the whole tracker once, then prints its address
-and serves a page until Ctrl+C. On the left are the families, as `gltree tree` with no number picks
+Starts a local web server on `127.0.0.1` only, prints its address at once and serves a page until
+Ctrl+C. The whole tracker is read in the background; until that first read is done the page says it
+is reading, and the terminal says on stderr when it starts and when it ends, with the number of
+families and the time it took, or why it failed. A first read that fails leaves the server running:
+the page shows why, and the refresh button reads again. What can be checked without the network is
+checked before the address is printed, and a failure there stops with exit status 2: the repo
+config, the port, and for the server git's `origin`, the glab login and the CA certificate, or for
+`--snapshot` that the file opens and is not a directory. On the left are the families, as `gltree tree` with no number picks
 them (the finished ones behind a toggle), each with its progress and badges. A filter per badge
 value, and per badge's `missing`, lists every family that shows it, finished ones included, and
 every count above the list spans every family too. The toggle changes only the unfiltered list, and
@@ -283,14 +289,17 @@ the token stays in the server process.
 
 The page reads a small JSON API:
 
-- `GET /api/families`: the last full read, `{"version": 1, "read_at", "badges", "tree"}`, where
-  `tree` is `gltree tree --all --json` (version 3), `read_at` is a UTC time and `badges` the repo
-  config's list.
-- `POST /api/refresh`: reads the whole tracker again and answers the same shape.
+- `GET /api/families`: `{"version": 2, "state", "error", "read_at", "badges", "tree"}`. `state` is
+  `reading` while a full read runs, `ready` when the last one succeeded and `failed` when it failed,
+  with `error` saying why (`null` otherwise). `tree` is the last full read that succeeded, as
+  `gltree tree --all --json` (version 3) gives it, and `read_at` its UTC time; both are `null` until
+  one has. `badges` is the repo config's list.
+- `POST /api/refresh`: reads the whole tracker again and answers the same shape. While a read runs it
+  answers that shape at once, `state` `reading`, and starts nothing.
 - `GET /api/tree/N`: N's tree as `gltree tree N --json` gives it, read fresh; 404 for a number the
   tracker does not hold.
 
-An error answers `{"version": 1, "error"}`: 404 for an unknown path or number, 405 (with
+An error answers `{"version": 2, "error"}`: 404 for an unknown path or number, 405 (with
 `Allow`) for a known path asked with another method, 400 and 413 for a request it cannot read or a
 body it does not take, 502 when the tracker could not be read. The server answers only requests
 addressed to `127.0.0.1` or `localhost` at its port (403 otherwise), and the API only its own page:

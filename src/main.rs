@@ -724,12 +724,13 @@ Output:
     #[command(
         about = "Serve a local page of the tracker's families and trees on 127.0.0.1",
         long_about = "Starts a local web server on 127.0.0.1 only, out of reach of other machines,
-reads the whole tracker, prints the page's address and serves the page until
-Ctrl+C. On the left are the families (a root and everything under it), as
-`gltree tree` picks them, the finished ones behind a toggle, each with its
-progress and badges; on the right is the selected family's tree, read fresh,
-every item linked to its page on the server. The refresh button reads the
-whole tracker again. It writes nothing to the tracker.
+prints the page's address at once and serves the page until Ctrl+C. The
+whole tracker is read in the background; until that first read is done, the
+page says it is reading. On the left are the families (a root and everything
+under it), as `gltree tree` picks them, the finished ones behind a toggle,
+each with its progress and badges; on the right is the selected family's
+tree, read fresh, every item linked to its page on the server. The refresh
+button reads the whole tracker again. It writes nothing to the tracker.
 
 Badges come from `[[badges]]` in the repo config: each names a label prefix,
 and a root's label that starts with it is shown as a badge.",
@@ -740,7 +741,9 @@ and a root's label that starts with it is shown as a badge.",
   gltree serve --snapshot tracker.json    # from a file; refresh reads it again
 
 Output:
-  Text: the address, `http://127.0.0.1:PORT/`, once the first read is done.
+  Text: the address, `http://127.0.0.1:PORT/`, before the first read starts.
+  On stderr, a line when the first read starts and one when it ends, with
+  the number of families and the time it took, or with why it failed.
 
 ",
             requires_clone!(),
@@ -749,8 +752,11 @@ Output:
             reads_the_config!(),
             "
 Exit status:
-  2 when it cannot start (a port in use, a config or a first read that fails),
-  with the reason on stderr and no address printed. Ctrl+C stops it."
+  2 when it cannot start (a port in use, a config that fails, git's origin,
+  the glab login or the CA certificate it cannot read, a snapshot file that
+  will not open or is a directory), with the reason on stderr and no address
+  printed. A first read that fails does not stop it: the page shows why, and
+  the refresh button reads again. Ctrl+C stops it."
         )
     )]
     Serve {
@@ -801,9 +807,9 @@ fn server() -> Result<GitLab, TrackerError> {
 }
 
 /// The snapshot when one is named, else the server.
-fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker>, TrackerError> {
+fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker + Send>, TrackerError> {
     Ok(match snapshot {
-        Some(path) => Box::new(SnapshotFile { path }),
+        Some(path) => Box::new(SnapshotFile::open(path)?),
         None => Box::new(server()?),
     })
 }
@@ -1130,11 +1136,20 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let listener = serve::bind(port).map_err(|e| format!("127.0.0.1:{port}: {e}"))?;
             let port = listener.local_addr()?.port();
             let walk = snapshot.is_none();
+            let first = source(snapshot.clone())?;
             let open: serve::Open = Box::new(move || source(snapshot.clone()));
             let app = Arc::new(serve::App::new(open, walk, config, port));
-            app.refresh()?;
             writeln!(out, "http://127.0.0.1:{port}/")?;
             out.flush()?;
+            eprintln!("gltree: reading the whole tracker");
+            let began = std::time::Instant::now();
+            app.start(first, move |read| match read {
+                Ok(n) => eprintln!(
+                    "gltree: read {n} families in {:.1} s",
+                    began.elapsed().as_secs_f64()
+                ),
+                Err(e) => eprintln!("gltree: the first read failed: {e}"),
+            });
             serve::serve(listener, app)?;
             Ok(ExitCode::SUCCESS)
         }

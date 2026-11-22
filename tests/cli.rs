@@ -940,24 +940,51 @@ fn clone_with_config(name: &str, config: &str) -> std::path::PathBuf {
 const BADGES: &str = "extra_keys = [\"marker\"]\n\n[[badges]]\nprefix = \"SP\"\nname = \"Spec\"\nextra = \"marker\"\nmissing = \"none yet\"\n";
 
 fn serve_in(dir: &Path, snapshot: &str) -> Served {
+    serve_from(&mut gltree_cmd(
+        dir,
+        &["serve", "--snapshot", snapshot, "--port", "0"],
+    ))
+}
+
+fn serve_from(cmd: &mut Command) -> Served {
     use std::io::BufRead;
-    let mut child = gltree_cmd(dir, &["serve", "--snapshot", snapshot, "--port", "0"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut line = String::new();
-    std::io::BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let served = Served {
+    let mut child = cmd.stdout(std::process::Stdio::piped()).spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = std::io::BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let mut served = Served {
         child,
-        base: line.trim_end().trim_end_matches('/').to_string(),
+        base: String::new(),
     };
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("serve printed no address within 10 s");
     assert!(
         line.starts_with("http://127.0.0.1:") && line.ends_with("/\n"),
         "{line:?}"
     );
+    served.base = line.trim_end().trim_end_matches('/').to_string();
     served
+}
+
+fn read_families(base: &str) -> serde_json::Value {
+    let start = std::time::Instant::now();
+    loop {
+        let (status, v) = json_of("GET", &format!("{base}/api/families"));
+        assert_eq!((status, &v["version"]), (200, &serde_json::json!(2)), "{v}");
+        if v["state"] != "reading" {
+            return v;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "still reading: {v}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 fn http(method: &str, url: &str) -> (u16, String) {
@@ -995,11 +1022,10 @@ fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
     let (status, page) = http("GET", &format!("{}/", s.base));
     assert_eq!(status, 200);
     assert!(page.contains("<title>gltree</title>"), "{page}");
-    let (status, v) = json_of("GET", &format!("{}/api/families", s.base));
-    assert_eq!(status, 200);
+    let v = read_families(&s.base);
     assert_eq!(
-        (v["version"].clone(), v["tree"]["version"].clone()),
-        (1.into(), 3.into())
+        (v["state"].clone(), v["tree"]["version"].clone()),
+        ("ready".into(), 3.into())
     );
     assert_eq!(family_numbers(&v), [1, 7, 8, 12, 14, 15, 17]);
     assert_eq!(
@@ -1025,6 +1051,7 @@ fn serve_refresh_reads_the_snapshot_file_again() {
     let snap = dir.join("t.json");
     std::fs::copy(fixture_path(), &snap).unwrap();
     let s = serve_in(&dir, "t.json");
+    assert_eq!(read_families(&s.base)["state"], "ready");
     let title = |v: &serde_json::Value| {
         v["tree"]["roots"]
             .as_array()
@@ -1103,6 +1130,72 @@ fn serve_refuses_a_badge_whose_extra_key_is_not_declared_and_prints_no_address()
     assert!(out.stdout.is_empty());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("other") && err.contains("extra_keys"), "{err}");
+}
+
+#[test]
+fn serve_with_a_malformed_snapshot_prints_its_address_then_answers_failed_and_says_why() {
+    use std::io::Read;
+    let dir = clone_with_config("serve-malformed", "");
+    std::fs::write(dir.join("bad.json"), "not a snapshot").unwrap();
+    let mut s = serve_from(
+        gltree_cmd(&dir, &["serve", "--snapshot", "bad.json", "--port", "0"])
+            .stderr(std::process::Stdio::piped()),
+    );
+    let mut err = s.child.stderr.take().unwrap();
+    let v = read_families(&s.base);
+    assert_eq!(
+        (&v["state"], &v["tree"]),
+        (&serde_json::json!("failed"), &serde_json::Value::Null)
+    );
+    let why = v["error"].as_str().unwrap();
+    assert!(why.contains("the snapshot file is malformed"), "{why}");
+    let _ = s.child.kill();
+    let _ = s.child.wait();
+    let mut said = String::new();
+    err.read_to_string(&mut said).unwrap();
+    assert!(
+        said.contains("reading the whole tracker")
+            && said.contains("the first read failed: the snapshot file is malformed"),
+        "{said}"
+    );
+}
+
+#[test]
+fn serve_prints_its_address_while_the_first_read_still_waits_on_the_server() {
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let held: Vec<_> = silent.incoming().collect();
+        drop(held);
+    });
+    let dir = clone_with_origin("serve-address-first");
+    let glab = dir.join("glab");
+    std::fs::create_dir_all(&glab).unwrap();
+    std::fs::write(
+        glab.join("config.yml"),
+        format!(
+            "hosts:\n    gitlab.example.invalid:\n        api_host: 127.0.0.1:{port}\n        api_protocol: http\n        token: a-token\n"
+        ),
+    )
+    .unwrap();
+    let s = serve_from(
+        gltree_cmd(&dir, &["serve", "--port", "0"])
+            .env("GLAB_CONFIG_DIR", &glab)
+            .env_remove("GITLAB_TOKEN")
+            .stderr(std::process::Stdio::null()),
+    );
+    let base = &s.base;
+    let (status, v) = json_of("GET", &format!("{base}/api/families"));
+    assert_eq!(
+        (status, &v["version"], &v["state"], &v["tree"]),
+        (
+            200,
+            &serde_json::json!(2),
+            &serde_json::json!("reading"),
+            &serde_json::Value::Null
+        ),
+        "{v}"
+    );
 }
 
 #[test]

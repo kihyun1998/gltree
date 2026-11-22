@@ -12,6 +12,18 @@ pub struct SnapshotFile {
 }
 
 impl SnapshotFile {
+    /// The snapshot at `path`, once the file opens; its content is read by each read.
+    pub fn open(path: PathBuf) -> Result<SnapshotFile, Error> {
+        if fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+            return Err(Error::unreadable(
+                format!("the snapshot file {}", path.display()),
+                "it is a directory",
+            ));
+        }
+        File::open(&path).map_err(|e| unreadable(&path, e))?;
+        Ok(SnapshotFile { path })
+    }
+
     /// The snapshot text `parse` reads back: a JSON list of items, by number.
     pub fn to_bytes(items: &[Item]) -> Vec<u8> {
         let mut sorted: Vec<&Item> = items.iter().collect();
@@ -78,14 +90,16 @@ pub fn replace_file(
     done
 }
 
+fn unreadable(path: &Path, e: io::Error) -> Error {
+    Error::unreadable(
+        format!("the snapshot file {}", path.display()),
+        e.to_string(),
+    )
+}
+
 impl Tracker for SnapshotFile {
     fn all_items(&self) -> Result<Vec<Item>, Error> {
-        let bytes = std::fs::read(&self.path).map_err(|e| {
-            Error::unreadable(
-                format!("the snapshot file {}", self.path.display()),
-                e.to_string(),
-            )
-        })?;
+        let bytes = std::fs::read(&self.path).map_err(|e| unreadable(&self.path, e))?;
         Self::parse(&bytes)
     }
 
@@ -123,6 +137,22 @@ mod tests {
     use crate::item::{Comment, State};
     use std::io::Write;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_directory_is_not_a_snapshot() {
+        let dir = std::env::temp_dir().join(format!("gltree-snapshot-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let e = SnapshotFile::open(dir.clone())
+            .err()
+            .expect("a directory opened as a snapshot");
+        let _ = std::fs::remove_dir(&dir);
+        let said = e.to_string();
+        assert!(
+            said.starts_with(&format!("cannot read the snapshot file {}", dir.display()))
+                && said.ends_with("it is a directory"),
+            "{said}"
+        );
+    }
 
     fn empty_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gltree-replace-{name}"));

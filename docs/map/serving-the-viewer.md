@@ -11,11 +11,11 @@ reasons below.
 
 ## Design model
 - **Read only.** The server calls only the tracker port's reads: `all_items` through `tree::tree`,
-  and `level` through `tree::live_tree` (`App::refresh`, `App::tree_of`). Nothing on the page
+  and `level` through `tree::live_tree` (`App::read_all`, `App::tree_of`). Nothing on the page
   writes (issue #27, out of scope).
 - **Two reads.** The full read (`tree::tree` with no root, every family, finished ones included)
-  happens once at start, before the address is printed, and again on `POST /api/refresh`; its answer
-  is kept and `GET /api/families` serves the kept one. `GET /api/tree/N` reads N's tree fresh: against
+  starts once the address is printed, on a thread of its own (`App::start`), and again on
+  `POST /api/refresh`; its answer is kept and `GET /api/families` serves the kept one. `GET /api/tree/N` reads N's tree fresh: against
   the server it walks from N (`walk`, as `tree N` does), from a snapshot it reads the file again. A
   full read of a tracker of a few thousand items took about 45 s (maintainer, measured, 2026-11-19),
   so the page shows the kept read at once and swaps in the walked tree when it arrives.
@@ -32,9 +32,32 @@ reasons below.
   GET without the body, and a 405 names its `Allow` (RFC 9110). A failed accept waits 100 ms before the
   next, so a lasting error (no file handles left) does not spin a core. A judgement over a small server
   crate (reading, 2026-11-19): the four routes need no more.
-- **Refreshes run one at a time** (`App::reading`): a second waits for the first and then reads
-  again, so a read that started earlier can never be the one kept. `read_at` is when the kept read
-  finished.
+- **The address comes first, the first read after it** (issue #35, confirmed with the maintainer,
+  2026-11-23; it reverses #27's "the first full read happens at start, before the address is printed",
+  maintainer, 2026-11-20). On a tracker of 2,803 items on a self-hosted CE the old order showed nothing
+  in the terminal for about a minute (maintainer, measured, 2026-11-20). Before the address, `main`
+  calls `source` once: for the server that reads git's `origin`, the glab login and the CA certificate
+  with no network; for `--snapshot` it opens the file and refuses a directory (`SnapshotFile::open`; on Linux and
+  macOS opening a directory succeeds, so the open alone would let one through). Either failing exits
+  2 with no address, as a port in use or a config error does. The tracker `source` opened is the one
+  the first read reads (`App::start` takes it), so nothing is opened twice; later reads open their
+  own through `Open`. The terminal says on stderr when the first
+  read starts and when it ends, with the number of families and the time, or why it failed; stdout
+  carries the address only, since callers read its first line.
+- **One read at a time; a refresh during one starts nothing** (issue #35). `App::begin` marks a read
+  as running, and `App::start` marks it before returning, so a refresh that arrives before the
+  thread runs cannot start a second one. `POST /api/refresh` while a read runs answers the
+  `/api/families` shape at once with `state` `reading`; otherwise it reads on the request's thread
+  and answers when the read ends (worker's judgement, 2026-11-23: the brief changed only the refresh
+  that meets a running read). A read that panics is caught (`App::finish`) and kept as a failed read
+  naming the panic, so `reading` is always released and the next refresh reads again.
+  `read_at` is when the kept read finished.
+- **`state`** (`App::families_of`, worker's judgement, 2026-11-23, derived from what the page must
+  show): `reading` while any read runs, the first or a refresh; `failed` when the last read failed,
+  with `error` its message; `ready` when it succeeded. `tree` and `read_at` are the last read that
+  succeeded, `null` until one has, and stay through a later refresh and a failed one: a page opened
+  during a refresh shows the kept families at once, and one opened after a failed refresh shows them
+  with the failure. A failed refresh answers 502 to the request that asked.
 - **Who may ask.** A request whose `Host` is not `127.0.0.1` or `localhost` at the port (any case;
   no port means 80, as browsers send it) is refused (403) before anything is read, which stops a
   website from reading the tracker through DNS rebinding; a head with two `Host` lines is refused
@@ -44,8 +67,8 @@ reasons below.
   `Sec-Fetch-Site`. A request with neither header (curl, a script on the machine) is served
   (`App::ours`, `App::handle`). Every answer sets `no-store`, `nosniff`,
   `no-referrer` and a CSP allowing only the page's inline script and style and `connect-src 'self'`.
-- **JSON**: `/api/families` and errors carry `serve::JSON_VERSION` 1 —
-  `{version, read_at, badges, tree}` and `{version, error}`; `tree` and `/api/tree/N` are
+- **JSON**: `/api/families` and errors carry `serve::JSON_VERSION` 2 — `{version, state, error, read_at, badges, tree}`
+  and `{version, error}`; `tree` and `/api/tree/N` are
   `tree::to_json` at its own version ([drawing-a-tree](drawing-a-tree.md)). `read_at` is UTC,
   written by `utc` with no date crate. Status: 404 for an unknown path or number, 405 for a known path
   with another method, 400 / 413 for a head or body it will not read, 403 as above, 502 for a read
@@ -68,7 +91,12 @@ reasons below.
   matches no family says so in the list and the detail; "None" and "Nothing left to do" stay for an
   empty "All" list, where they are true (maintainer, 2026-11-19). A chosen filter is held by its
   badge and value, not its place in the list, since the buttons are drawn again on every filter,
-  toggle and refresh. Open
+  toggle and refresh. While `/api/families` answers `reading` the page asks again every second
+  (`take`, `load`; worker's judgement, 2026-11-23) and shows the refresh button's busy state; the
+  list area keeps "Reading…" until there is a kept read. When the read ends, `ready` paints the page
+  and flashes "Up to date", as a refresh does; `failed` shows its `error` in the banner through
+  `fail`, "The read failed" with no kept read and "The refresh failed" with one, and the button can
+  read again. A refresh answered `reading` takes the same path. Open
   blockers show on every node, the root in the list and the detail included. Counting motion is off
   under reduced motion, as the fades are.
 - **How the page moves** (maintainer, 2026-11-20, choosing variant D of four after the earlier motion
@@ -116,12 +144,13 @@ reasons below.
   keeps [listing-roots](listing-roots.md)' boundary: label meanings are the caller's.
 
 ## Code
-- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, App, App::new, App::refresh, App::tree_of, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, App, Kept, App::new, App::start, App::refresh, App::begin, App::finish, App::read_all, App::families_of, App::tree_of, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/snapshot.rs — SnapshotFile::open` (the check before the address, a directory refused)
 - `src/config.rs — Badge` (serialised as it is into `/api/families`' `badges`)
 - `src/tracker.rs — FakeTracker::fail_all_items` (the unit test that a walk reads no full tracker)
 - `src/serve.html`
 - `src/main.rs — Command::Serve, source, server`
-- `tests/cli.rs — serve_in, serve_that_stops, the serve_* tests`
+- `tests/cli.rs — serve_in, read_families, serve_that_stops, the serve_* tests`; `serve_prints_its_address_while_the_first_read_still_waits_on_the_server` holds the first read behind a local listener that never answers, since a snapshot's read ends too fast to show the order
 
 ## Reference behaviour
 **None.**
@@ -138,5 +167,7 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
+- That `App::start` marks the read before its thread runs is not tested: the race it closes needs
+  the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).
 - The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).

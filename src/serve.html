@@ -137,12 +137,20 @@ function draw(r,note){const k=detail(r,note);if(k===shown)return;shown=k;
  const f=d.querySelector('.ring .fg');if(f&&from)f.style.strokeDashoffset=from;ring()}
 async function fresh(n){try{const v=await call('GET','/api/tree/'+n);if(sel===n&&v.roots[0])draw(v.roots[0])}
  catch(e){if(sel===n)draw(kept(n),'Showing the last full read: '+e.message)}}
-async function load(){try{data=await call('GET','/api/families');$('#err').hidden=true;paint()}catch(e){$('#m').innerHTML='';fail('Cannot read the families: '+e.message)}}
+const busy=()=>$('#rf').classList.contains('busy');
+function button(on,label){const b=$('#rf');b.classList.toggle('busy',on);b.querySelector('span').textContent=label}
+function keep(v){if(!data&&v.tree){data=v;paint()}}
+function stop(m){button(false,'Refresh');if(!data)$('#m').innerHTML='';fail(m)}
+function take(v){const was=busy();
+ if(v.state==='reading'){keep(v);if(!was)button(true,'Reading…');setTimeout(load,1000);return}
+ if(v.state==='failed'){keep(v);stop((data?'The refresh failed: ':'The read failed: ')+v.error);return}
+ button(false,'Refresh');data=v;$('#err').hidden=true;paint();
+ if(was){const b=$('#rf'),t=b.querySelector('span');b.classList.add('ok');t.textContent='Up to date';setTimeout(()=>{b.classList.remove('ok');t.textContent='Refresh'},1400)}}
+async function ask(method,path,lead){try{take(await call(method,path))}catch(e){stop(lead+e.message)}}
+function load(){ask('GET','/api/families','Cannot read the families: ')}
 function toggle(){if(flt!=='all')return;showAll=!showAll;sync();relist()}
 $('#sw').onclick=toggle;$('#sw').onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();toggle()}};
-$('#rf').onclick=async()=>{const b=$('#rf'),t=b.querySelector('span');if(b.classList.contains('busy'))return;b.classList.add('busy');t.textContent='Reading…';
- try{data=await call('POST','/api/refresh');$('#err').hidden=true;b.classList.remove('busy');b.classList.add('ok');t.textContent='Up to date';paint();setTimeout(()=>{b.classList.remove('ok');t.textContent='Refresh'},1400)}
- catch(e){b.classList.remove('busy');t.textContent='Refresh';fail('The refresh failed: '+e.message)}};
+$('#rf').onclick=()=>{if(busy())return;button(true,'Reading…');ask('POST','/api/refresh','The refresh failed: ')};
 $('#m').onclick=e=>{const f=e.target.closest('[data-f]');if(f){flt=filters[+f.dataset.f].key;relist();return}
  const s=e.target.closest('[data-s]');if(s){const n=+s.dataset.s;if(n===sel){fresh(n);return}sel=n;moveHl();choose()}};
 addEventListener('resize',moveHl);
