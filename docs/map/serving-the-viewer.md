@@ -99,6 +99,31 @@ reasons below.
   read again. A refresh answered `reading` takes the same path. Open
   blockers show on every node, the root in the list and the detail included. Counting motion is off
   under reduced motion, as the fades are.
+- **The layout fills the window and the page does not scroll** (maintainer, 2026-11-23, choosing variant
+  A2 of four in a prototype run against 150 synthetic families and an 86-item family; issue #38). The top
+  bar and the hero stay; the family list and the detail share the rest of the window and each scroll on
+  their own, so a family chosen far down the list shows the top of its detail, and scrolling a long detail
+  leaves the list where it was. The body is a column that is the window's height and does not scroll;
+  `main`, `#m` and the split each take what is left (`flex:1` with `min-height:0`, without which a
+  flex item grows to its content); the split's one row is `minmax(0,1fr)`, which the list's column and
+  the detail fill by the grid's stretch, the column with `min-height:0` so that `.list` (`flex:1`) takes
+  what the filters leave; `.list` and `.detail` are the two scroll containers. The banner, "Reading…", an empty list and a filter
+  that matches nothing lay out inside the same column. A new selection gives the detail a new element
+  (`fade`), so it starts at its top; a walk's tree drawn in place (`draw`) keeps the detail's scroll,
+  and a refresh that leaves the same family selected gives the new detail the scroll the old one had
+  (`paint`; the maintainer, 2026-11-23, at #38's review: a refresh used to keep the page's scroll). A
+  refresh that selects another family starts it at its top.
+  The selected row is brought into view inside the list, nearest edge and with no motion (`into`, from
+  `moveHl`), whenever the list is drawn or the selection moves: a refresh draws the list again at its
+  top, and a filter or the toggle can leave the selected row outside the part shown. A resize moves the
+  highlight only, so it does not take the list away from where the reader scrolled it. A row reached by
+  Tab is brought into view by the browser's own focus scrolling. Only desktop full-screen windows were
+  judged; narrow windows are out of scope (maintainer, 2026-11-23). The page declares
+  `color-scheme: light dark`, so under a dark system theme the two scrollbars and other native controls
+  are dark too. The highlight and the list's crossfade ghost are positioned against `.list`, their
+  containing block, so they scroll with the rows. The detail's ghost is positioned against the split,
+  which does not scroll; it is the old `.detail` itself, a scroll container of its own, and keeps the
+  scroll it had while it fades.
 - **How the page moves** (maintainer, 2026-11-20, choosing variant D of four after the earlier motion
   was too strong to look at and a version with almost no fade flickered). Content moves by opacity only:
   nothing slides, rises, scales, overshoots or lifts on hover. Content enters by a plain 0.22 s fade (the
@@ -106,7 +131,8 @@ reasons below.
   list rows (as one block) change by a crossfade (`fade()`, which also gives the new content its
   `enter`): the old node itself, not a copy, becomes the ghost; it is taken out of the flow over the same
   place, held to both side edges of its container so that it keeps the new content's width when a
-  scrollbar comes or goes, and fades out in 0.22 s while the new content fades in under it, so the place never goes blank.
+  scrollbar comes or goes, and to the height it had, since the detail stretches to its grid row and a
+  ghost out of the flow would otherwise shrink to its content (#38), and fades out in 0.22 s while the new content fades in under it, so the place never goes blank.
   The ghost loses its id and is `inert`, so it takes no pointer events and is hidden from assistive
   technology; it starts at the opacity the old content showed at that moment (a fade-in cut short does
   not pop back to full), and removes itself when its own fade ends or is cancelled, as when reduced
@@ -199,5 +225,5 @@ reasons below.
 - Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).
-- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The repository runs no JavaScript.
+- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The layout (#38) was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving 150 families and an 86-item family: the page does not scroll in the ready, reading, failed, failed-with-a-kept-read and empty states; the 100th family shows the top of its detail; scrolling the long detail to its end leaves the list in place; a row reached by Tab and one left selected by a refresh or the toggle is inside the list; a resize leaves the list's scroll; `color-scheme` is declared; the detail's ghost keeps the old height; a refresh keeps the detail's scroll for the same family and starts another at its top; #31's focus and the reduced-motion rule hold (2026-11-23). The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).
