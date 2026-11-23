@@ -219,7 +219,11 @@ reasons below.
   what is redrawn (the top bar, or nothing) is left alone, so a redraw never takes focus. Focusing
   adds no motion. Choosing a family, which crossfades the detail (`choose`), and the finished-family
   toggle, which crossfades the rows (`relist`), keep no focus of their own: each is started from the
-  list or the top bar, outside what it replaces.
+  list or the top bar, outside what it replaces, as long as the activation puts focus on what was
+  activated, as a click does in Chromium and the keyboard does everywhere. An activation that leaves
+  focus where it was (a screen reader's browse mode, a click in Safari) can leave it on a detail or
+  a row these acts replace, and then it is lost; present since the page landed (#37's lens review,
+  2026-11-24), left as it is by the maintainer, since the page is judged on desktop Edge.
 - **Only the latest tree read is drawn** (issue #30, 2026-11-23). Each `/api/tree/N` read takes a number from
   `want` (`fresh`), and `choose` takes one too, so a change of selection, a selection left empty, and
   the repaint after a full read each make every read still out of date. An answer, a success or a
