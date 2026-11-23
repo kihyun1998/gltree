@@ -3,7 +3,7 @@
 <style>
 :root{--bg:#fafafa;--surface:#fff;--ink:#111;--sub:#6b6b6b;--faint:#a3a3a3;--hair:#ececec;--accent:#4f46e5;--open:#16a34a;--warn:#ea580c;--r:14px;--ease:cubic-bezier(.2,.8,.2,1)}
 @media (prefers-color-scheme:dark){:root{--bg:#0b0b0c;--surface:#141416;--ink:#f2f2f3;--sub:#9a9aa1;--faint:#5c5c63;--hair:#232327;--accent:#818cf8;--open:#4ade80;--warn:#fb923c}}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (prefers-reduced-motion:reduce){*,::before,::after{animation:none!important;transition:none!important}}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Pretendard","Malgun Gothic",sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .top{position:sticky;top:0;z-index:5;backdrop-filter:saturate(1.4) blur(14px);background:color-mix(in srgb,var(--bg) 78%,transparent);border-bottom:1px solid var(--hair)}
@@ -46,7 +46,7 @@ main{max-width:1080px;margin:0 auto;padding:36px 28px 80px}
 .badge{font-size:11px;border-radius:999px;padding:2px 8px;white-space:nowrap;border:1px solid var(--hair);color:var(--sub)}
 .badge.todo{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
 .li .r{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-.filters{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}.filters button{font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--hair);color:var(--sub);background:var(--surface);transition:all .25s var(--ease)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}.filters button{font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--hair);color:var(--sub);background:var(--surface)}
 .filters button.on{color:var(--surface);background:var(--ink);border-color:var(--ink)}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.chip{font-size:12px;padding:2px 9px;border-radius:6px;background:var(--hair);color:var(--sub)}
 .fieldbox{margin-top:18px;border:1px solid var(--hair);border-radius:12px;padding:12px 14px;display:flex;gap:12px;align-items:center}
@@ -106,7 +106,7 @@ function detail(r,note){if(!r)return '<div class="detail" id="det"><div class="e
  +'<div class="tree">'+flat(r).slice(1).map(({n,d})=>link(n.url,'node',dot(n)+'<span class="num">#'+esc(n.number)+'</span>'+title(n)+blk(n)+n.labels.map(l=>'<span class="chip" style="margin-left:6px">'+esc(l)+'</span>').join('')+(safeUrl(n.url)?'<span class="go">↗</span>':''),' style="padding-left:'+(8+(d-1)*22)+'px"')).join('')+'</div></div>'}
 function pick(){const every=data.tree.roots;buildFilters(every);const roots=every.filter(filters.find(f=>f.key===flt).test);
  if(!roots.find(r=>r.number===sel))sel=roots.length?roots[0].number:null;return {every,roots}}
-const bar=every=>filters.map((f,i)=>'<button data-f="'+i+'" class="'+(f.key===flt?'on':'')+'">'+esc(f.label)+(i?' '+every.filter(f.test).length:'')+'</button>').join('');
+const bar=every=>filters.map((f,i)=>'<button data-f="'+i+'">'+esc(f.label)+(i?' '+every.filter(f.test).length:'')+'</button>').join('');
 const rows=roots=>roots.length?roots.map(x=>'<button class="li" data-s="'+esc(x.number)+'">'+dot(x)+'<span>'+title(x)+'<small>#'+esc(x.number)+(x.total?' · '+esc(x.closed)+'/'+esc(x.total):'')+blk(x)+'</small></span><span class="r"><span class="num">'+pct(x)+'%</span>'+marks(x).map(chip).join('')+'</span></button>').join(''):'<div class="empty">'+none('None')+'</div>';
 const still=()=>typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches;
 function roll(){const calm=still();document.querySelectorAll('[data-roll]').forEach(el=>{const to=+el.dataset.roll,t0=performance.now();if(calm){el.textContent=to;return}const f=t=>{const k=Math.min(1,(t-t0)/300);el.textContent=Math.round(to*(1-Math.pow(1-k,3)));if(k<1)requestAnimationFrame(f)};requestAnimationFrame(f)})}
@@ -121,11 +121,12 @@ function fail(m){const e=$('#err');e.textContent=m;e.hidden=false}
 const clock=t=>new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 function stamp(){$('#at').textContent=data?'Read '+clock(data.read_at):''}
 function sync(){const s=$('#sw'),off=flt!=='all';s.classList.toggle('on',showAll);s.setAttribute('aria-checked',String(showAll));
- s.setAttribute('aria-disabled',String(off));s.tabIndex=off?-1:0;s.title=off?'Badge filters list every family':''}
+ s.setAttribute('aria-disabled',String(off));s.tabIndex=off?-1:0;s.title=off?'Badge filters list every family':'';
+ document.querySelectorAll('#fl [data-f]').forEach(b=>b.classList.toggle('on',filters[+b.dataset.f].key===flt))}
 function paint(){if(!data)return;const {every,roots}=pick();
  $('#m').innerHTML=hero(every)+'<div class="split enter"><div><div class="filters" id="fl">'+bar(every)+'</div><div class="list" id="lst"><span class="hl"></span><div id="rows">'+(listed=rows(roots))+'</div></div></div><div id="det"></div></div>';
  sync();roll();moveHl();stamp();choose()}
-function relist(){if(!data)return;const was=sel,{every,roots}=pick(),html=rows(roots);$('#fl').innerHTML=bar(every);
+function relist(){if(!data)return;const was=sel,{roots}=pick(),html=rows(roots);
  if(html!==listed){listed=html;fade($('#rows'),'<div id="rows">'+html+'</div>')}sync();moveHl();
  if(sel!==was||sel===null&&detail(null)!==shown)choose()}
 async function call(method,path){const r=await fetch(path,{method});let v=null;try{v=await r.json()}catch(e){}

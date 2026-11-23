@@ -90,9 +90,9 @@ reasons below.
   filters list every family); choosing "All" brings it back (maintainer, 2026-11-19). A filter that
   matches no family says so in the list and the detail; "None" and "Nothing left to do" stay for an
   empty "All" list, where they are true (maintainer, 2026-11-19). A chosen filter is held by its
-  badge and value, not its place in the list, since the buttons are drawn again on every filter,
-  toggle and refresh. While `/api/families` answers `reading` the page asks again every second
-  (`take`, `load`; worker's judgement, 2026-11-23) and shows the refresh button's busy state; the
+  badge and value, not its place in the list, since a refresh draws the buttons again from the new
+  read, where the list can differ. While `/api/families` answers `reading` the page asks again every
+  second (`take`, `load`; worker's judgement, 2026-11-23) and shows the refresh button's busy state; the
   list area keeps "Reading…" until there is a kept read. When the read ends, `ready` paints the page
   and flashes "Up to date", as a refresh does; `failed` shows its `error` in the banner through
   `fail`, "The read failed" with no kept read and "The refresh failed" with one, and the button can
@@ -114,17 +114,26 @@ reasons below.
   highlight moves to the selected row in 0.22 s and the ring fills in 0.4 s, both on the page's `--ease`
   curve, which does not overshoot, and the hero counts up in 0.3 s. The switch knob slides between its
   two sides on the same curve, since its side is the switch's state (worker's judgement, 2026-11-20),
-  and the refresh button's busy icon spins. Under reduced motion every fade, crossfade, highlight move,
-  ring fill, count and the spin is off or instant, except the knob's slide: the CSS rule that turns
-  motion off selects `*`, which does not match the knob's `::after` (a gap held for the maintainer).
+  and the refresh button's busy icon spins. Nothing else moves: a filter button changes to its chosen
+  look at once, with no transition, since the buttons stay in place and a transition on them would be
+  a motion outside this list (worker's judgement, 2026-11-23). Under reduced motion every fade,
+  crossfade, highlight move, ring fill, count, the spin and the knob's slide is off or instant: the
+  CSS rule that turns motion off selects `*`, `::before` and `::after`, since `*` alone does not
+  match pseudo-elements and the knob is the switch's `::after` (checked in headless Edge with reduced
+  motion emulated, 2026-11-23: no element or pseudo-element keeps a transition or an animation, and
+  toggling the switch starts none).
 - **What each act draws** (maintainer, 2026-11-19: selecting a family must not stutter; a detail
   drawn a second time when the walk's tree arrives plays its entrance and ring again). The first read
   and a refresh draw the whole page (`paint`): the hero counts up, and the list and the detail fade in.
-  A filter or the toggle draws the filter buttons again and crossfades the list rows when their markup
-  changed (`relist`): the hero counts every family, so neither changes it, and the highlight stays the
-  same element and moves to the selected row. A selected family that stays in the list keeps its detail
-  as it is, a stale note included, and is not read again. A list that drops it selects its first family
-  and crossfades the detail as `choose` does; a list left empty whose message changes crossfades the
+  A filter or the toggle (`relist`) marks the chosen filter button in place (`sync`), keeping every
+  button element, so a filter chosen by keyboard keeps focus on its button and the next Tab moves on
+  from there. Marking in place holds because `relist` works on the same read as the `paint` that
+  drew the bar, so the filters come out the same and in the same order; only `paint` follows a new
+  read, and it draws the bar whole. `relist` crossfades the list rows when their markup changed; the
+  hero counts every family, so neither act changes it, and the highlight stays the same element and
+  moves to the selected row. A selected family that stays in the list keeps its detail as it is, a
+  stale note included, and is not read again. A list that drops it selects its first family and
+  crossfades the detail as `choose` does; a list left empty whose message changes crossfades the
   detail to the new message. A filter whose rows and detail markup come out the same changes nothing.
   Selecting a family moves the highlight and crossfades the detail, its ring filling once (`choose`).
   The tree `/api/tree/N` brings replaces the detail's contents in place (`draw`), keeping the detail
