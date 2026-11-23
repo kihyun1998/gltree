@@ -113,7 +113,8 @@ reasons below.
   scroll and plays no fade; an unfold made while its fold row has focus moves focus to the first row
   it revealed, since the row it was on is gone. That is an unfold from the keyboard, and a click too
   in a browser that focuses a clicked button, as Chromium does (#41's lens review, CDP mouse input:
-  focus moved, `:focus-visible` false, so no ring shows).
+  focus moved, `:focus-visible` false, so no ring shows). The move is the redraw's focus rule below:
+  the fold row has no counterpart, and the first revealed row stands where it stood (#37).
 - **No filter bar** (#41, taking over #40). The page once had a filter per badge value and per
   badge's `missing`; the maintainer does not use them (2026-11-23), and with no `[[badges]]` the bar
   held one "All" button that changed nothing. The buttons, their state and the dimming of
@@ -143,7 +144,8 @@ reasons below.
   refresh that selects another family starts it at its top.
   The selected row is brought into view inside the list, nearest edge and with no motion (`into`, from
   `moveHl`), whenever the list is drawn or the selection moves: a refresh draws the list again at its
-  top, and the toggle can leave the selected row outside the part shown. A resize moves the
+  top, and the toggle can leave the selected row outside the part shown; a row that keeps focus
+  through a refresh is brought into view after it (*Focus survives a redraw*, below). A resize moves the
   highlight only, so it does not take the list away from where the reader scrolled it. A row reached by
   Tab is brought into view by the browser's own focus scrolling. Only desktop full-screen windows were
   judged; narrow windows are out of scope (maintainer, 2026-11-23). The page declares
@@ -194,6 +196,30 @@ reasons below.
   items, so a selection there takes this path (read-only run, 2026-11-20). Clicking the
   selected family again reads `/api/tree/N` again and puts it in place through `draw`, with no fade
   (worker's judgement, 2026-11-19).
+- **Focus survives a redraw** (issue #37, 2026-11-24). The two acts that rebuild what may hold
+  focus, `paint` (the first read and a refresh) and `draw` (a walked tree, an unfold, the "Show done
+  items" switch), note before they redraw whether focus is inside what they replace (`hold`), and
+  afterwards focus its counterpart in what was drawn (`go`), by a key that survives the redraw: a
+  family row by its number (`data-s`), a tree row by its item number (`data-n`), a fold row by its
+  parent's number (`data-u`), "Open in GitLab" by its class, and the detail itself by its id. Keys
+  are compared as strings against `dataset`, never put into a selector, so a number the tracker
+  sends cannot change what is looked up; the search covers only `#rows` and `#det`, which a fading
+  ghost no longer carries as its id. Where the counterpart is gone, focus goes to a fallback (worker's
+  judgement, 2026-11-24, choosing the nearest thing that still means the same place): a family row
+  that left the list falls to the selected family's row, or the list when it is empty; something in
+  the detail of a family still selected falls to the tree row now at the position it had, the last
+  row when the tree got shorter. Everything else falls to the detail: the family gone, the tree
+  empty, or "Open in GitLab" or the detail itself with nothing in its place.
+  A target that cannot take focus (a tree row with no link, the detail) gets `tabIndex` -1 for as
+  long as it holds focus, and loses it on blur: `draw` keeps the detail element, and a detail left
+  at -1 would lose the Tab stop Chromium gives a scroll container once it grows long enough to scroll.
+  Focus is moved with `preventScroll`, so the detail keeps the scroll `paint` gives it back; a
+  family row focused this way is brought into the list's view as the highlight's row is (`into`),
+  since a rebuilt list starts at the selected row and the focused one may be elsewhere. Focus outside
+  what is redrawn (the top bar, or nothing) is left alone, so a redraw never takes focus. Focusing
+  adds no motion. Choosing a family, which crossfades the detail (`choose`), and the finished-family
+  toggle, which crossfades the rows (`relist`), keep no focus of their own: each is started from the
+  list or the top bar, outside what it replaces.
 - **Only the latest tree read is drawn** (issue #30, 2026-11-23). Each `/api/tree/N` read takes a number from
   `want` (`fresh`), and `choose` takes one too, so a change of selection, a selection left empty, and
   the repaint after a full read each make every read still out of date. An answer, a success or a
@@ -250,5 +276,5 @@ reasons below.
 - Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).
-- The page's behaviour (selection, folds, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The layout (#38) was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving 150 families and an 86-item family: the page does not scroll in the ready, reading, failed, failed-with-a-kept-read and empty states; the 100th family shows the top of its detail; scrolling the long detail to its end leaves the list in place; a row reached by Tab and one left selected by a refresh or the toggle is inside the list; a resize leaves the list's scroll; `color-scheme` is declared; the detail's ghost keeps the old height; a refresh keeps the detail's scroll for the same family and starts another at its top; #31's focus and the reduced-motion rule hold (2026-11-23). #41 was checked in headless Edge at 1440×900 with a stubbed `fetch` serving families that include an item with 12 labels and a 149-character title and an XSS title, label and `javascript:` URL: the order, the marks, `N left`, the clamp, the `+k` chip, no overflow in the list or the detail, the folds and where they sit, unfolding in place with focus moved, the folds kept through a walk drawn in place and a refresh and reset by a new selection, both switches, and no filter bar with and without `[[badges]]`; each of those checks was seen failing, on the page before #41 or under a mutation of the code it covers (2026-11-23). The reduced-motion rule was read, not run: the new rows add no transition. The repository runs no JavaScript.
+- The page's behaviour (selection, folds, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The layout (#38) was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving 150 families and an 86-item family: the page does not scroll in the ready, reading, failed, failed-with-a-kept-read and empty states; the 100th family shows the top of its detail; scrolling the long detail to its end leaves the list in place; a row reached by Tab and one left selected by a refresh or the toggle is inside the list; a resize leaves the list's scroll; `color-scheme` is declared; the detail's ghost keeps the old height; a refresh keeps the detail's scroll for the same family and starts another at its top; #31's focus and the reduced-motion rule hold (2026-11-23). #41 was checked in headless Edge at 1440×900 with a stubbed `fetch` serving families that include an item with 12 labels and a 149-character title and an XSS title, label and `javascript:` URL: the order, the marks, `N left`, the clamp, the `+k` chip, no overflow in the list or the detail, the folds and where they sit, unfolding in place with focus moved, the folds kept through a walk drawn in place and a refresh and reset by a new selection, both switches, and no filter bar with and without `[[badges]]`; each of those checks was seen failing, on the page before #41 or under a mutation of the code it covers (2026-11-23). The reduced-motion rule was read, not run: the new rows add no transition. #37 was checked in headless Edge at 1440×900 with a stubbed `fetch` that holds every answer: a family row, a tree link, a fold row and "Open in GitLab" keep focus through a refresh, a tree link and "Open in GitLab" through a walked tree drawn in place, the three fallbacks, the top bar's focus and no focus left alone, the unfold rule, Tab after a refresh going on from the kept row, the detail's scroll kept, and a row far down the list shown in it; each was seen failing on the page before #37 or under one of eleven mutations of the new code (2026-11-24). A detail that took focus as a fallback and then scrolls is a Tab stop again (#37's review): Tab from the last family row reaches it, and goes to the body when `tabIndex` -1 is left on it. The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).

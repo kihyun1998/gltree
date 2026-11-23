@@ -132,9 +132,15 @@ function fail(m){const e=$('#err');e.textContent=m;e.hidden=false}
 const clock=t=>new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 function stamp(){$('#at').textContent=data?'Read '+clock(data.read_at):''}
 function sync(){[[$('#sw'),showAll],[$('#sd'),showDone]].forEach(([s,on])=>{s.classList.toggle('on',on);s.setAttribute('aria-checked',String(on))})}
-function paint(){if(!data)return;const was=sel,d=$('#det'),top=d?d.scrollTop:0,{every,roots}=pick();
+function by(k,v){const w=$(k==='s'?'#rows':'#det');return w&&[...w.querySelectorAll('[data-'+k+']')].find(e=>e.dataset[k]===v)}
+function go(n){if(!n)return;n.focus({preventScroll:true});if(document.activeElement!==n){n.tabIndex=-1;n.addEventListener('blur',()=>n.removeAttribute('tabindex'),{once:true});n.focus({preventScroll:true})}const l=$('#lst');if(l&&n.parentNode===$('#rows'))into(l,n)}
+function hold(root){const a=document.activeElement;if(!a||!root.contains(a))return ()=>{};
+ const k=['s','n','u'].find(k=>k in a.dataset),v=k&&a.dataset[k],gl=a.matches('.open-gl'),id=a.id,inList=!!a.closest('#lst'),fam=sel,i=a.parentNode.matches('.tree')?[...a.parentNode.children].indexOf(a):-1;
+ return ()=>{const t=$('#det .tree'),n=k?by(k,v):gl?$('#det .open-gl'):id?document.getElementById(id):null;
+  go(n||(inList?by('s',String(sel))||$('#lst'):sel===fam&&i>=0&&t&&t.children.length?t.children[Math.min(i,t.children.length-1)]:$('#det')))}}
+function paint(){if(!data)return;const was=sel,d=$('#det'),top=d?d.scrollTop:0,back=hold($('#m')),{every,roots}=pick();
  $('#m').innerHTML=hero(every)+'<div class="split enter"><div><div class="list" id="lst"><span class="hl"></span><div id="rows">'+(listed=rows(roots))+'</div></div></div><div id="det"></div></div>';
- sync();roll();moveHl();stamp();choose();if(sel===was)$('#det').scrollTop=top}
+ sync();roll();moveHl();stamp();choose();if(sel===was)$('#det').scrollTop=top;back()}
 function relist(){if(!data)return;const was=sel,{roots}=pick(),html=rows(roots);
  if(html!==listed){listed=html;fade($('#rows'),'<div id="rows">'+html+'</div>')}sync();moveHl();
  if(sel!==was||sel===null&&detail(null)!==shown)choose()}
@@ -143,8 +149,8 @@ async function call(method,path){const r=await fetch(path,{method});let v=null;t
 const kept=n=>data.tree.roots.find(r=>r.number===n);
 function choose(){want++;if(sel!==foldsOf){unfolded.clear();foldsOf=sel}const r=sel===null?null:kept(sel);last=[r,null];shown=detail(r,null);fade($('#det'),shown);ring();if(sel!==null)fresh(sel)}
 function draw(r,note){last=[r,note];const k=detail(r,note);if(k===shown)return;shown=k;
- const d=$('#det'),o=d.querySelector('.ring .fg'),from=o&&getComputedStyle(o).strokeDashoffset,t=document.createElement('template');
- t.innerHTML=k;d.replaceChildren(...t.content.firstElementChild.childNodes);
+ const d=$('#det'),back=hold(d),o=d.querySelector('.ring .fg'),from=o&&getComputedStyle(o).strokeDashoffset,t=document.createElement('template');
+ t.innerHTML=k;d.replaceChildren(...t.content.firstElementChild.childNodes);back();
  const f=d.querySelector('.ring .fg');if(f&&from)f.style.strokeDashoffset=from;ring()}
 async function fresh(n){const t=++want;let r;
  try{r=(await call('GET','/api/tree/'+n)).roots[0]}
@@ -165,8 +171,7 @@ function toggle(){showAll=!showAll;sync();relist()}
 function done(){showDone=!showDone;sync();if(data)draw(...last)}
 [[$('#sw'),toggle],[$('#sd'),done]].forEach(([s,f])=>{s.onclick=f;s.onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();f()}}});
 $('#rf').onclick=()=>{if(busy())return;button(true,'Reading…');ask('POST','/api/refresh','The refresh failed: ')};
-function unfold(u){const had=document.activeElement===u,i=[...u.parentNode.children].indexOf(u);
- unfolded.add(+u.dataset.u);draw(...last);const n=had&&$('#det .tree').children[i];if(n){if(!n.matches('a'))n.tabIndex=-1;n.focus({preventScroll:true})}}
+function unfold(u){unfolded.add(+u.dataset.u);draw(...last)}
 $('#m').onclick=e=>{const u=e.target.closest('[data-u]');if(u){unfold(u);return}
  const s=e.target.closest('[data-s]');if(s){const n=+s.dataset.s;if(n===sel){fresh(n);return}sel=n;moveHl();choose()}};
 addEventListener('resize',()=>moveHl(true));
