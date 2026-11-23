@@ -110,8 +110,10 @@ reasons below.
   keep the folds as the reader left them, and a new selection starts folded (worker's judgement,
   2026-11-23, following how the detail's scroll is kept). An unfold and the switch redraw the detail
   in place through `draw` with the tree and note last drawn (`last`), so the detail keeps its
-  scroll and plays no fade; an unfold made from the keyboard moves focus to the first row it
-  revealed, since the row it was on is gone.
+  scroll and plays no fade; an unfold made while its fold row has focus moves focus to the first row
+  it revealed, since the row it was on is gone. That is an unfold from the keyboard, and a click too
+  in a browser that focuses a clicked button, as Chromium does (#41's lens review, CDP mouse input:
+  focus moved, `:focus-visible` false, so no ring shows).
 - **No filter bar** (#41, taking over #40). The page once had a filter per badge value and per
   badge's `missing`; the maintainer does not use them (2026-11-23), and with no `[[badges]]` the bar
   held one "All" button that changed nothing. The buttons, their state and the dimming of
