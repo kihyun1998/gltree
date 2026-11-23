@@ -134,6 +134,26 @@ reasons below.
   items, so a selection there takes this path (read-only run, 2026-11-20). Clicking the
   selected family again reads `/api/tree/N` again and puts it in place through `draw`, with no fade
   (worker's judgement, 2026-11-19).
+- **Only the latest tree read is drawn** (issue #30, 2026-11-23). Each `/api/tree/N` read takes a number from
+  `want` (`fresh`), and `choose` takes one too, so a change of selection, a selection left empty, and
+  the repaint after a full read each make every read still out of date. An answer, a success or a
+  failure, whose number is not the latest is dropped: it neither draws nor is remembered. So of two
+  quick clicks on the selected family only the second answer is drawn, whatever order they arrive
+  in, and a walk sent before a refresh that answers after it leaves the refreshed page as it is. A walk
+  that answers while a refresh still runs is drawn, since the page has not changed yet.
+- **A failed re-read shows the newer of the last full read and the family's last walk** (maintainer,
+  2026-11-23, at #30's confirm stop; the issue left the choice open). The page keeps each family's
+  last successful walk and its time in `walks`, and empties it when a full read (the first read or a
+  refresh) succeeds, so a kept walk is always newer than the kept full read. A failure draws the kept
+  walk with "Showing the read of this family at HH:MM:SS" and the error, or the full read with
+  "Showing the last full read" and the error. Selecting a family still shows the full read first, as
+  before; the kept walk is used only after a failure.
+- **The refresh button's states.** Every change of the button, the "Up to date" flash's `ok` class
+  included, goes through `button`, which cancels the flash's 1.4 s timer (`flash`) first, so a refresh
+  started within those 1.4 s keeps its busy state (issue #30, 2026-11-23). Once the button is busy it
+  refuses a click, and only `take` with `reading` schedules the next `load`, so from then on one
+  `/api/families` chain runs. Before the page's first `/api/families` answers, the button is not yet
+  busy, so a refresh clicked then starts a second chain (see Known holes).
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
   `http:` or `https:` URL** (`safeUrl`); any other `url`, `null` included, renders the node
   without a link. `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them
@@ -167,7 +187,8 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
+- Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).
-- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The repository runs no JavaScript.
+- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).
