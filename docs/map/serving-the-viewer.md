@@ -78,20 +78,46 @@ reasons below.
 - **The page** (`src/serve.html`, `include_str!` into `PAGE`): hand-written HTML, CSS and JS, no
   framework, no build step, and no outside address in it (a unit test refuses `://`). Its layout
   follows the Split prototype the maintainer chose (2026-11-19). It applies the finished-family
-  toggle itself with `tree`'s rule — a root closed with `closed == total` — and computes badges,
-  filters and counts from `labels`, `extra` and the config's `badges`. The toggle is the "All"
-  filter's own test and governs the "All" list only. Every badge filter's values and list, every
-  filter button's count and every hero number (families, open items, each badge's `missing`) span
-  all families, finished ones included: `missing` only ever marks a closed root, which the toggle
-  would mostly hide, and the maintainer chose the same for value filters (issue #27, user story 15;
-  maintainer, 2026-11-19) and for the hero, so that no two of its numbers count different sets
-  (maintainer, 2026-11-19). While a badge filter is chosen the toggle would change nothing, so it is
-  dimmed and cannot be operated (`aria-disabled`, out of the tab order, a title saying badge
-  filters list every family); choosing "All" brings it back (maintainer, 2026-11-19). A filter that
-  matches no family says so in the list and the detail; "None" and "Nothing left to do" stay for an
-  empty "All" list, where they are true (maintainer, 2026-11-19). A chosen filter is held by its
-  badge and value, not its place in the list, since a refresh draws the buttons again from the new
-  read, where the list can differ. While `/api/families` answers `reading` the page asks again every
+  toggle itself with `tree`'s rule — a root closed with `closed == total` — and computes badges
+  and counts from `labels`, `extra` and the config's `badges`. Every hero number (families, open
+  items, each badge's `missing`) spans all families, finished ones included: `missing` only ever
+  marks a closed root, which the toggle would mostly hide, and no two of its numbers count different
+  sets (maintainer, 2026-11-19). "None" and "Nothing left to do" are what an empty list and its detail
+  say.
+- **What the page shows** (issue #41: the maintainer picked variant A of three, run on a real
+  tracker of about 630 families and 2,800 items, 2026-11-23). A mark tells three states apart, the
+  same in the list, the detail head and the tree (`mark`): to do, an open item with no open blocker,
+  is a hollow ring in `--accent`; blocked, open with an open blocker, a ring in `--warn` with a
+  bar; done a filled check in `--done`, its title in `--sub`. The family list runs by number, highest first, since the newest family is the
+  one usually wanted; children inside a family keep `tree`'s ascending order, the order the work was
+  split in, which follows `blocked by` (maintainer, #41). A list row is the mark, the title clamped to
+  two lines, the number, a progress bar of `pct`, the blockers, and `N left` in `--accent`, or
+  `done` when nothing is left, beside the badge chips. `left` is the open descendants, or the family
+  itself, 1 or 0, when it has no children. A tree row is a grid of mark, number and title, the title
+  taking the rest of the width and wrapping anywhere; the blockers and at most 3 labels, then a `+k`
+  chip whose `title` names the rest, sit on a second line under the title (`node`). On that tracker
+  labels per item ran to 12 and titles to 149 characters, and the one-line row let labels take the
+  title's width and run past the card. The detail head shows the family's own labels in full.
+- **Done items fold** (#41). Under each parent, the root included, the children whose whole subtree
+  is closed (`finished`, the page's copy of the one rule) fold into one `✓ N done — show` row, N counting those children, placed where
+  the first of them stood (`branch`). Clicking it unfolds that parent's done children with their
+  whole subtrees: a revealed done subtree folds nothing inside it, since it would only show another
+  fold row (worker's judgement, 2026-11-23). A lone done child folds too, so the rule has no
+  exception. The top bar's "Show done items" switch (`showDone`) unfolds every fold; it is a page
+  setting and stays through every act. Which parents the reader unfolded is `unfolded`, a set of
+  numbers that belongs to the selected family: `choose` empties it when the selection changes to
+  another family (`foldsOf`), so a walk drawn in place and a refresh that keeps the family selected
+  keep the folds as the reader left them, and a new selection starts folded (worker's judgement,
+  2026-11-23, following how the detail's scroll is kept). An unfold and the switch redraw the detail
+  in place through `draw` with the tree and note last drawn (`last`), so the detail keeps its
+  scroll and plays no fade; an unfold made from the keyboard moves focus to the first row it
+  revealed, since the row it was on is gone.
+- **No filter bar** (#41, taking over #40). The page once had a filter per badge value and per
+  badge's `missing`; the maintainer does not use them (2026-11-23), and with no `[[badges]]` the bar
+  held one "All" button that changed nothing. The buttons, their state and the dimming of
+  "Finished families" while one was chosen went with them. `[[badges]]` and `/api/families` are
+  unchanged and the badge chips still show where configured.
+- **Reading state.** While `/api/families` answers `reading` the page asks again every
   second (`take`, `load`; worker's judgement, 2026-11-23) and shows the refresh button's busy state; the
   list area keeps "Reading…" until there is a kept read. When the read ends, `ready` paints the page
   and flashes "Up to date", as a refresh does; `failed` shows its `error` in the banner through
@@ -107,15 +133,15 @@ reasons below.
   `main`, `#m` and the split each take what is left (`flex:1` with `min-height:0`, without which a
   flex item grows to its content); the split's one row is `minmax(0,1fr)`, which the list's column and
   the detail fill by the grid's stretch, the column with `min-height:0` so that `.list` (`flex:1`) takes
-  what the filters leave; `.list` and `.detail` are the two scroll containers. The banner, "Reading…", an empty list and a filter
-  that matches nothing lay out inside the same column. A new selection gives the detail a new element
+  it; `.list` and `.detail` are the two scroll containers. The banner, "Reading…" and an empty list
+  lay out inside the same column. A new selection gives the detail a new element
   (`fade`), so it starts at its top; a walk's tree drawn in place (`draw`) keeps the detail's scroll,
   and a refresh that leaves the same family selected gives the new detail the scroll the old one had
   (`paint`; the maintainer, 2026-11-23, at #38's review: a refresh used to keep the page's scroll). A
   refresh that selects another family starts it at its top.
   The selected row is brought into view inside the list, nearest edge and with no motion (`into`, from
   `moveHl`), whenever the list is drawn or the selection moves: a refresh draws the list again at its
-  top, and a filter or the toggle can leave the selected row outside the part shown. A resize moves the
+  top, and the toggle can leave the selected row outside the part shown. A resize moves the
   highlight only, so it does not take the list away from where the reader scrolled it. A row reached by
   Tab is brought into view by the browser's own focus scrolling. Only desktop full-screen windows were
   judged; narrow windows are out of scope (maintainer, 2026-11-23). The page declares
@@ -138,11 +164,10 @@ reasons below.
   not pop back to full), and removes itself when its own fade ends or is cancelled, as when reduced
   motion turns on mid-fade. Three things that are not content keep a motion of their own: the
   highlight moves to the selected row in 0.22 s and the ring fills in 0.4 s, both on the page's `--ease`
-  curve, which does not overshoot, and the hero counts up in 0.3 s. The switch knob slides between its
+  curve, which does not overshoot, and the hero counts up in 0.3 s. The knob of each switch slides between its
   two sides on the same curve, since its side is the switch's state (worker's judgement, 2026-11-20),
-  and the refresh button's busy icon spins. Nothing else moves: a filter button changes to its chosen
-  look at once, with no transition, since the buttons stay in place and a transition on them would be
-  a motion outside this list (worker's judgement, 2026-11-23). Under reduced motion every fade,
+  and the refresh button's busy icon spins. Nothing else moves: the state marks and the fold rows
+  carry no transition, and an unfold draws in place with no fade (#41). Under reduced motion every fade,
   crossfade, highlight move, ring fill, count, the spin and the knob's slide is off or instant: the
   CSS rule that turns motion off selects `*`, `::before` and `::after`, since `*` alone does not
   match pseudo-elements and the knob is the switch's `::after` (checked in headless Edge with reduced
@@ -151,16 +176,14 @@ reasons below.
 - **What each act draws** (maintainer, 2026-11-19: selecting a family must not stutter; a detail
   drawn a second time when the walk's tree arrives plays its entrance and ring again). The first read
   and a refresh draw the whole page (`paint`): the hero counts up, and the list and the detail fade in.
-  A filter or the toggle (`relist`) marks the chosen filter button in place (`sync`), keeping every
-  button element, so a filter chosen by keyboard keeps focus on its button and the next Tab moves on
-  from there. Marking in place holds because `relist` works on the same read as the `paint` that
-  drew the bar, so the filters come out the same and in the same order; only `paint` follows a new
-  read, and it draws the bar whole. `relist` crossfades the list rows when their markup changed; the
-  hero counts every family, so neither act changes it, and the highlight stays the same element and
+  The finished-family toggle (`relist`) sets both switches' state in place (`sync`); the switches
+  sit in the top bar, which no act draws again, so a switch operated by keyboard keeps focus.
+  `relist` crossfades the list rows when their markup changed; the
+  hero counts every family, so the toggle does not change it, and the highlight stays the same element and
   moves to the selected row. A selected family that stays in the list keeps its detail as it is, a
   stale note included, and is not read again. A list that drops it selects its first family and
-  crossfades the detail as `choose` does; a list left empty whose message changes crossfades the
-  detail to the new message. A filter whose rows and detail markup come out the same changes nothing.
+  crossfades the detail as `choose` does; a list left empty crossfades the detail to
+  "Nothing left to do". A toggle whose rows come out the same changes nothing.
   Selecting a family moves the highlight and crossfades the detail, its ring filling once (`choose`).
   The tree `/api/tree/N` brings replaces the detail's contents in place (`draw`), keeping the detail
   element, so a fade-in still running carries on uninterrupted and the new ring starts from the offset
@@ -225,5 +248,5 @@ reasons below.
 - Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).
-- The page's behaviour (selection, filters, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The layout (#38) was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving 150 families and an 86-item family: the page does not scroll in the ready, reading, failed, failed-with-a-kept-read and empty states; the 100th family shows the top of its detail; scrolling the long detail to its end leaves the list in place; a row reached by Tab and one left selected by a refresh or the toggle is inside the list; a resize leaves the list's scroll; `color-scheme` is declared; the detail's ghost keeps the old height; a refresh keeps the detail's scroll for the same family and starts another at its top; #31's focus and the reduced-motion rule hold (2026-11-23). The repository runs no JavaScript.
+- The page's behaviour (selection, folds, refresh states, escaping, what each act animates) has no test in the repository; it was checked with throwaway Node harnesses, in headless Edge over CDP, and by reading (2026-11-19; the motion again 2026-11-20). The ordering of tree reads, the fallback and the flash timer (#30) were checked in headless Edge with a harness that replaces `fetch`, holds every answer and releases them in a chosen order (2026-11-23). The layout (#38) was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving 150 families and an 86-item family: the page does not scroll in the ready, reading, failed, failed-with-a-kept-read and empty states; the 100th family shows the top of its detail; scrolling the long detail to its end leaves the list in place; a row reached by Tab and one left selected by a refresh or the toggle is inside the list; a resize leaves the list's scroll; `color-scheme` is declared; the detail's ghost keeps the old height; a refresh keeps the detail's scroll for the same family and starts another at its top; #31's focus and the reduced-motion rule hold (2026-11-23). #41 was checked in headless Edge at 1440×900 with a stubbed `fetch` serving families that include an item with 12 labels and a 149-character title and an XSS title, label and `javascript:` URL: the order, the marks, `N left`, the clamp, the `+k` chip, no overflow in the list or the detail, the folds and where they sit, unfolding in place with focus moved, the folds kept through a walk drawn in place and a refresh and reset by a new selection, both switches, and no filter bar with and without `[[badges]]`; each of those checks was seen failing, on the page before #41 or under a mutation of the code it covers (2026-11-23). The reduced-motion rule was read, not run: the new rows add no transition. The repository runs no JavaScript.
 - `missing` counts every root `tree` draws, a closed item whose parent is absent included, while `roots` does not count that one; and a snapshot saved before labels were kept reads every label list as `[]`, so every closed root shows `missing` ([not-recorded-is-not-none](not-recorded-is-not-none.md)). Open for the maintainer (2026-11-19).

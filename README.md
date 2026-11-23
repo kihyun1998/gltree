@@ -278,11 +278,14 @@ the page shows why, and the refresh button reads again. What can be checked with
 checked before the address is printed, and a failure there stops with exit status 2: the repo
 config, the port, and for the server git's `origin`, the glab login and the CA certificate, or for
 `--snapshot` that the file opens and is not a directory. On the left are the families, as `gltree tree` with no number picks
-them (the finished ones behind a toggle), each with its progress and badges. A filter per badge
-value, and per badge's `missing`, lists every family that shows it, finished ones included, and
-every count above the list spans every family too. The toggle changes only the unfiltered list, and
-is dimmed while a badge filter is chosen. On the right is the selected family's tree, read fresh
-when it is selected, with every item linked to its page on the server. The refresh button reads the
+them (the finished ones behind a toggle), newest (highest number) first, each with its title, a
+progress bar, how many items are left and its badges. Every count above the list spans every family,
+finished ones included. On the right is the selected family's tree, read fresh when it is selected,
+children in ascending order, with every item linked to its page on the server; each item shows at
+most three labels and a `+k` chip naming the rest. A mark tells an item to do (a ring), blocked by
+an open item (a ring with a bar) and done (a check) apart, in the list, the detail and the tree.
+Under each item, children whose whole subtree is closed fold into one `✓ N done — show` row that
+unfolds them; the "Show done items" switch unfolds them all. The refresh button reads the
 whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
 the token stays in the server process.
