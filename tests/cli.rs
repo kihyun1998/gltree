@@ -1162,14 +1162,23 @@ fn serve_refuses_a_badge_whose_extra_key_is_not_declared_and_prints_no_address()
 
 #[test]
 fn serve_with_a_malformed_snapshot_prints_its_address_then_answers_failed_and_says_why() {
-    use std::io::Read;
+    use std::io::BufRead;
+    use std::time::{Duration, Instant};
     let dir = clone_with_config("serve-malformed", "");
     std::fs::write(dir.join("bad.json"), "not a snapshot").unwrap();
     let mut s = serve_from(
         gltree_cmd(&dir, &["serve", "--snapshot", "bad.json", "--port", "0"])
             .stderr(std::process::Stdio::piped()),
     );
-    let mut err = s.child.stderr.take().unwrap();
+    let err = std::io::BufReader::new(s.child.stderr.take().unwrap());
+    let (tx, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in err.lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let v = read_families(&s.base);
     assert_eq!(
         (&v["state"], &v["tree"]),
@@ -1177,10 +1186,17 @@ fn serve_with_a_malformed_snapshot_prints_its_address_then_answers_failed_and_sa
     );
     let why = v["error"].as_str().unwrap();
     assert!(why.contains("the snapshot file is malformed"), "{why}");
+    let mut said = String::new();
+    let until = Instant::now() + Duration::from_secs(10);
+    while !said.contains("the first read failed") {
+        let left = until.saturating_duration_since(Instant::now());
+        match lines.recv_timeout(left) {
+            Ok(line) => said += &(line + "\n"),
+            Err(_) => break,
+        }
+    }
     let _ = s.child.kill();
     let _ = s.child.wait();
-    let mut said = String::new();
-    err.read_to_string(&mut said).unwrap();
     assert!(
         said.contains("reading the whole tracker")
             && said.contains("the first read failed: the snapshot file is malformed"),
