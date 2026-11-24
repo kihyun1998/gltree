@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The version of the JSON shapes this module answers with, besides `/api/tree`'s, which is `tree`'s.
-pub const JSON_VERSION: u32 = 3;
+pub const JSON_VERSION: u32 = 4;
 pub const DEFAULT_PORT: u16 = 7420;
 const PAGE: &str = include_str!("serve.html");
 const HEAD_LIMIT: usize = 16 * 1024;
@@ -664,8 +664,8 @@ mod tests {
         let r = a.handle(&get("GET", "/api/families"));
         assert_eq!((r.status.code(), r.content_type), (200, "application/json"));
         let v = body(&r);
-        assert_eq!((&v["version"], &v["state"]), (&json!(3), &json!("ready")));
-        assert_eq!(v["tree"]["version"], 3);
+        assert_eq!((&v["version"], &v["state"]), (&json!(4), &json!("ready")));
+        assert_eq!(v["tree"]["version"], 4);
         assert_eq!(numbers(&v), [1, 3]);
         assert_eq!(
             v["tree"]["roots"][0]["labels"],
@@ -711,7 +711,7 @@ mod tests {
         let r = a.handle(&get("GET", "/api/tree/1"));
         assert_eq!(r.status.code(), 200);
         let v = body(&r);
-        assert_eq!(v["version"], 3);
+        assert_eq!(v["version"], 4);
         assert_eq!(v["roots"][0]["children"][0]["title"], "renamed");
         for path in ["/api/tree/42", "/api/tree/x", "/api/tree/"] {
             let r = a.handle(&get("GET", path));
@@ -1098,7 +1098,7 @@ mod tests {
                 &v["error"]
             ),
             (
-                &json!(3),
+                &json!(4),
                 &json!("reading"),
                 &Value::Null,
                 &Value::Null,
@@ -1142,7 +1142,7 @@ mod tests {
         let v = s.families();
         assert_eq!(
             (&v["version"], &v["state"], &v["tree"]),
-            (&json!(3), &json!("failed"), &Value::Null)
+            (&json!(4), &json!("failed"), &Value::Null)
         );
         assert!(
             v["error"].as_str().unwrap().contains("the network is down"),
@@ -1229,7 +1229,7 @@ mod tests {
         s.fail(true);
         let r = s.app.handle(&get("POST", "/api/refresh"));
         assert_eq!(r.status, Status::BadGateway);
-        assert_eq!(body(&r)["version"], 3);
+        assert_eq!(body(&r)["version"], 4);
         assert!(
             body(&r)["error"]
                 .as_str()
@@ -1321,7 +1321,7 @@ mod tests {
         let v = body(&a.handle(&get("GET", "/api/repos")));
         assert_eq!(
             v,
-            json!({"version": 3, "repos": [
+            json!({"version": 4, "repos": [
                 {"name": "app", "state": "reading", "error": null, "read_at": null, "families": null, "open": null},
                 {"name": "web", "state": "reading", "error": null, "read_at": null, "families": null, "open": null},
             ]})
@@ -1331,7 +1331,7 @@ mod tests {
         let v = body(&r);
         assert_eq!(
             (&v["version"], &v["repo"], &v["state"]),
-            (&json!(3), &json!("web"), &json!("ready"))
+            (&json!(4), &json!("web"), &json!("ready"))
         );
         assert_eq!(numbers(&v), [5, 7]);
         assert_eq!((opened(&app_opens), opened(&web_opens)), (0, 1));
@@ -1434,7 +1434,7 @@ mod tests {
         let a = app(Arc::new(Mutex::new(items())));
         assert_eq!(
             body(&a.handle(&get("GET", "/api/repos"))),
-            json!({"version": 3, "repos": []})
+            json!({"version": 4, "repos": []})
         );
         for (method, path) in [
             ("GET", "/api/families"),

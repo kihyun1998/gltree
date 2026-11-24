@@ -89,7 +89,7 @@ fn all_with_a_root_number_is_a_usage_error() {
 fn json_leaves_out_the_same_families_and_all_brings_them_back() {
     let roots = |args: &[&str]| -> Vec<u64> {
         let v: serde_json::Value = serde_json::from_str(&tree_text(args)).unwrap();
-        assert_eq!(v["version"], 3);
+        assert_eq!(v["version"], 4);
         v["roots"]
             .as_array()
             .unwrap()
@@ -140,8 +140,20 @@ fn a_tracker_of_only_finished_families_draws_nothing_and_exits_0() {
 fn json_prints_the_versioned_tree() {
     let v: serde_json::Value =
         serde_json::from_str(&tree_text(&["tree", "3", "--snapshot", FIXTURE, "--json"])).unwrap();
-    assert_eq!(v["version"], 3);
+    assert_eq!(v["version"], 4);
     assert_eq!(v["roots"][0]["blocked_by_open"], serde_json::json!([]));
+    assert_eq!(
+        (
+            &v["roots"][0]["related"],
+            &v["roots"][0]["from"],
+            &v["roots"][0]["blocks"]
+        ),
+        (
+            &serde_json::json!([]),
+            &serde_json::Value::Null,
+            &serde_json::json!([])
+        )
+    );
     assert_eq!(v["roots"][0]["number"], 3);
     assert_eq!(
         (
@@ -983,7 +995,7 @@ fn read_families(base: &str) -> serde_json::Value {
     let start = std::time::Instant::now();
     loop {
         let (status, v) = json_of("GET", &format!("{base}/api/families"));
-        assert_eq!((status, &v["version"]), (200, &serde_json::json!(3)), "{v}");
+        assert_eq!((status, &v["version"]), (200, &serde_json::json!(4)), "{v}");
         if v["state"] != "reading" {
             return v;
         }
@@ -1033,7 +1045,7 @@ fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
     let v = read_families(&s.base);
     assert_eq!(
         (v["state"].clone(), v["tree"]["version"].clone()),
-        ("ready".into(), 3.into())
+        ("ready".into(), 4.into())
     );
     assert_eq!(family_numbers(&v), [1, 7, 8, 12, 14, 15, 17]);
     assert_eq!(
@@ -1042,8 +1054,12 @@ fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
     );
     let (status, t) = json_of("GET", &format!("{}/api/tree/3", s.base));
     assert_eq!(status, 200);
-    assert_eq!(t["version"], 3);
+    assert_eq!(t["version"], 4);
     assert_eq!(t["roots"][0]["number"], 3);
+    assert_eq!(
+        (&t["roots"][0]["related"], &t["roots"][0]["from"]),
+        (&serde_json::json!([]), &serde_json::Value::Null)
+    );
     assert_eq!(
         t["roots"][0]["children"][0]["extra"],
         serde_json::json!({"marker": "K-1"})
@@ -1053,7 +1069,7 @@ fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
     assert!(e["error"].as_str().unwrap().contains("#42"), "{e}");
     assert_eq!(
         json_of("GET", &format!("{}/api/repos", s.base)),
-        (200, serde_json::json!({"version": 3, "repos": []}))
+        (200, serde_json::json!({"version": 4, "repos": []}))
     );
 }
 
@@ -1202,7 +1218,7 @@ fn serve_prints_its_address_while_the_first_read_still_waits_on_the_server() {
         (status, &v["version"], &v["state"], &v["tree"]),
         (
             200,
-            &serde_json::json!(3),
+            &serde_json::json!(4),
             &serde_json::json!("reading"),
             &serde_json::Value::Null
         ),
@@ -1478,7 +1494,7 @@ fn read_repos(base: &str) -> serde_json::Value {
     let start = std::time::Instant::now();
     loop {
         let (status, v) = json_of("GET", &format!("{base}/api/repos"));
-        assert_eq!((status, &v["version"]), (200, &serde_json::json!(3)), "{v}");
+        assert_eq!((status, &v["version"]), (200, &serde_json::json!(4)), "{v}");
         if v["repos"]
             .as_array()
             .unwrap()
@@ -1636,7 +1652,7 @@ fn serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one
     let s = serve_in_home(&home, &["--snapshot", &fixture_path()]);
     assert_eq!(
         json_of("GET", &format!("{}/api/repos", s.base)),
-        (200, serde_json::json!({"version": 3, "repos": []}))
+        (200, serde_json::json!({"version": 4, "repos": []}))
     );
     assert_eq!(read_families(&s.base)["repo"], serde_json::Value::Null);
 }

@@ -314,8 +314,9 @@ is closed is left out unless --all.",
 
 Output:
   Text, one item per line, each indented under its parent. --json prints
-  {\"version\": 3, \"roots\": [node]}, where a node is {number, title, state,
-  url, labels, extra, closed, total, blocked_by_open, children}.
+  {\"version\": 4, \"roots\": [node]}, where a node is {number, title, state,
+  url, labels, extra, closed, total, blocked_by_open, related, from, blocks,
+  children}.
 
 ",
             requires_clone!(),
@@ -341,7 +342,7 @@ Output:
 of the server"
         )]
         snapshot: Option<PathBuf>,
-        /// Print JSON (version 3) instead of text
+        /// Print JSON (version 4) instead of text
         #[arg(long)]
         json: bool,
     },

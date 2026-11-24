@@ -17,8 +17,8 @@ implementation, which is why its output is what callers read; it does not decide
 - **`tree` without a number leaves out families whose every item is closed**; `--all` draws every
   family and is a usage error (exit 2) beside a number. Leaving families out gives fewer `roots`, not
   another shape; `tree N --json`, which outside skills read, draws as before (#25).
-- **JSON shapes carry a version**, raised when the shape changes — a field added, removed or renamed; fewer items is not a shape change (#25): `tree` 3 (`url`, `labels` and `extra` on every node, #26), `check` 1,
-  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 3 (each module's `JSON_VERSION`,
+- **JSON shapes carry a version**, raised when the shape changes — a field added, removed or renamed; fewer items is not a shape change (#25): `tree` 4 (`related`, `from` and `blocks` on every node, #47; 3 added `url`, `labels` and `extra`, #26), `check` 1,
+  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 4, raised with the tree it carries (#47) (each module's `JSON_VERSION`,
   `NEW_JSON_VERSION`). The shapes are in the README and in each owning note.
 - **`serve`** listens on 127.0.0.1 only, port 7420 unless `--port` (0 takes a free one), and prints
   `http://127.0.0.1:<port>/` before its first full read, which runs in the background; what stops it

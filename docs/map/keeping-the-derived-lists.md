@@ -45,6 +45,7 @@ holds, and written back by `gltree sync`.
 - [writing-the-tree](writing-the-tree.md) — every write ends with `sync_one` on the other ends; it must leave no `derived` finding.
 - [migrating-a-tracker](migrating-a-tracker.md) — the plan fills every list with `expected` / `rebuilt`.
 - [the-command-line-contract](the-command-line-contract.md) — `sync --json` is versioned output.
+- [drawing-a-tree](drawing-a-tree.md) — every tree node carries `blocks` as the header holds it, nothing computed in reverse, so a list `sync` has not repaired shows as it stands, on the `serve` page's relations box too.
 
 ## Known holes / open
 - Two writers that sync the same item at once each write the whole description; the later one wins, and the next `sync` repairs the lists (ADR-0004's reasoning; not measured).

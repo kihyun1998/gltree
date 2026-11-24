@@ -74,6 +74,12 @@ a.node:hover .go{opacity:1}
 .tab{display:flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--hair);border-radius:999px;background:var(--surface);font-size:13px;color:var(--sub)}
 .tab:hover{box-shadow:0 2px 10px rgba(0,0,0,.06)}.tab.on{color:var(--ink);border-color:color-mix(in srgb,var(--ink) 55%,transparent)}
 .tab .n{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums}.tab .n.none{color:var(--done)}
+.rels{margin-top:18px;border:1px solid var(--hair);border-radius:12px;padding:10px 8px;display:flex;flex-direction:column;gap:10px}
+.rels .k{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;padding:0 6px 2px}
+.rel,.more{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:5px 6px;border-radius:8px}
+.rel .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rel .src,.rel .in{flex:none;color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
+button.rel:hover,.more:hover{background:var(--hair)}.more{color:var(--sub);font-size:13px}
+.hit{background:color-mix(in srgb,var(--accent) 16%,transparent)!important;border-radius:8px}
 .dot{width:7px;height:7px;border-radius:50%;flex:none}.dot.reading{background:var(--accent)}.dot.failed{background:var(--warn)}
 </style></head><body>
 <div class="top"><div class="in">
@@ -86,7 +92,7 @@ a.node:hover .go{opacity:1}
 </div></div>
 <main><nav class="tabs" id="tabs" aria-label="Repos" hidden></nav><p class="banner" id="err" hidden></p><div id="m"><div class="empty">Reading…</div></div></main>
 <script>
-let repos=[],repo=null,gen=0,tabTimer=0,data=null,showAll=false,showDone=false,unfolded=new Set(),foldsOf=null,sel=null,last=[null,null],shown=null,listed=null,want=0,walks={},flash=0;
+let repos=[],repo=null,gen=0,tabTimer=0,data=null,showAll=false,showDone=false,unfolded=new Set(),relMore=new Set(),aim=null,idx=null,idxOf=null,foldsOf=null,sel=null,last=[null,null],shown=null,listed=null,want=0,walks={},flash=0;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl=u=>{if(typeof u!=='string')return null;try{const x=new URL(u);return x.protocol==='http:'||x.protocol==='https:'?x.href:null}catch(e){return null}};
@@ -112,9 +118,21 @@ const node=(n,d)=>{const more=n.labels.slice(3),meta=blk(n)+n.labels.slice(0,3).
 function branch(p,d,o,all){const fold=!(all||showDone||unfolded.has(p.number));let put=false;
  p.children.forEach(c=>{if(fold&&finished(c)){if(!put){put=true;o.push('<button class="node fold" data-u="'+esc(p.number)+'"'+pad(d)+'><span>✓ '+p.children.filter(finished).length+' done — show</span></button>')}return}
   o.push(node(c,d));branch(c,d+1,o,all||finished(c))});return o}
+const KINDS=[['related','Related'],['from','Found while working on'],['blocks','Blocks']];
+function where(t){if(idxOf!==data.tree){idxOf=data.tree;idx=new Map();data.tree.roots.forEach(R=>flat(R).forEach(({n})=>{if(!idx.has(n.number))idx.set(n.number,{n,root:R})}))}return idx.get(t)}
+const ends=(n,k)=>k==='from'?(n.from==null?[]:[n.from]):n[k]||[];
+function rels(r){const fam=flat(r),here=new Map(fam.map(({n})=>[n.number,n]));
+ const gs=KINDS.map(([k,name])=>({k,name,out:fam.flatMap(({n})=>ends(n,k).map(t=>({src:n.number,t})))})).filter(g=>g.out.length);
+ if(!gs.length)return '';
+ return '<div class="rels">'+gs.map(({k,name,out})=>{const all=relMore.has(k);
+  return '<div data-k="'+esc(k)+'"><div class="k">'+esc(name)+'</div>'+(all?out:out.slice(0,5)).map(({src,t})=>{const h=here.get(t),w=h?null:where(t),n=h||(w&&w.n),key=' data-j="'+esc(k+':'+src+':'+t)+'"',
+    inner=(src!==r.number?'<span class="src">#'+esc(src)+' →</span>':'')+(n?mark(n):'<span class="st"></span>')+'<span class="num">#'+esc(t)+'</span>'+(n?title(n):'')+(w&&w.root.number!==r.number?'<span class="in">in #'+esc(w.root.number)+'</span>':'');
+   return n?'<button class="rel"'+key+' data-t="'+esc(t)+'">'+inner+'</button>':'<div class="rel"'+key+'>'+inner+'</div>'}).join('')
+   +(!all&&out.length>5?'<button class="more" data-g="'+esc(k)+'">'+esc(out.length-5)+' more</button>':'')+'</div>'}).join('')+'</div>'}
 function detail(r,note){if(!r)return '<div class="detail" id="det"><div class="empty">Nothing left to do</div></div>';
  const C=2*Math.PI*27,gl=safeUrl(r.url);
  return '<div class="detail" id="det"><div style="display:flex;gap:18px;align-items:center"><svg class="ring" viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="27"/><circle class="fg" cx="32" cy="32" r="27" stroke-dasharray="'+C+'" stroke-dashoffset="'+C+'" data-off="'+(C*(1-pct(r)/100))+'"/></svg><div style="flex:1"><div class="head">'+mark(r)+'<span class="num">#'+esc(r.number)+' · '+esc(r.state)+'</span></div><h3>'+esc(r.title)+'</h3><span class="num">'+(r.total?esc(r.closed)+' / '+esc(r.total)+' descendants closed':'no descendants')+'</span>'+blk(r)+'</div>'+(gl?'<a class="open-gl" href="'+esc(gl)+'" target="_blank" rel="noopener noreferrer">Open in GitLab ↗</a>':'')+'</div>'
+ +rels(r)
  +(r.labels.length?'<div class="chips">'+r.labels.map(l=>'<span class="chip">'+esc(l)+'</span>').join('')+'</div>':'')
  +marks(r).map(m=>{const v=m.b.extra!=null?r.extra[m.b.extra]:undefined;
    return '<div class="fieldbox">'+chip(m)+(v!=null?'<div><div class="k">extra.'+esc(m.b.extra)+'</div><code>'+esc(text(v))+'</code></div>':m.missing?'<div class="num">Closed with no '+esc(m.b.prefix)+' label</div>':'')+'</div>'}).join('')
@@ -140,8 +158,8 @@ function sync(){[[$('#sw'),showAll],[$('#sd'),showDone]].forEach(([s,on])=>{s.cl
 function by(k,v){const w=$(k==='s'?'#rows':'#det');return w&&[...w.querySelectorAll('[data-'+k+']')].find(e=>e.dataset[k]===v)}
 function go(n){if(!n)return;n.focus({preventScroll:true});if(document.activeElement!==n){n.tabIndex=-1;n.addEventListener('blur',()=>n.removeAttribute('tabindex'),{once:true});n.focus({preventScroll:true})}const l=$('#lst');if(l&&n.parentNode===$('#rows'))into(l,n)}
 function hold(root){const a=document.activeElement;if(!a||!root.contains(a))return ()=>{};
- const k=['s','n','u'].find(k=>k in a.dataset),v=k&&a.dataset[k],gl=a.matches('.open-gl'),id=a.id,inList=!!a.closest('#lst'),fam=sel,i=a.parentNode.matches('.tree')?[...a.parentNode.children].indexOf(a):-1;
- return ()=>{const t=$('#det .tree'),n=k?by(k,v):gl?$('#det .open-gl'):id?document.getElementById(id):null;
+ const k=['s','n','u','j','g'].find(k=>k in a.dataset),v=k&&a.dataset[k],gl=a.matches('.open-gl'),head=a.matches('#det h3'),id=a.id,inList=!!a.closest('#lst'),fam=sel,i=a.parentNode.matches('.tree')?[...a.parentNode.children].indexOf(a):-1;
+ return ()=>{const t=$('#det .tree'),n=k?by(k,v):gl?$('#det .open-gl'):head?$('#det h3'):id?document.getElementById(id):null;
   go(n||(inList?by('s',String(sel))||$('#lst'):sel===fam&&i>=0&&t&&t.children.length?t.children[Math.min(i,t.children.length-1)]:$('#det')))}}
 function paint(){if(!data)return;const was=sel,d=$('#det'),top=d?d.scrollTop:0,back=hold($('#m')),{every,roots}=pick();
  $('#m').innerHTML=hero(every)+'<div class="split enter"><div><div class="list" id="lst"><span class="hl"></span><div id="rows">'+(listed=rows(roots))+'</div></div></div><div id="det"></div></div>';
@@ -152,15 +170,26 @@ function relist(){if(!data)return;const was=sel,{roots}=pick(),html=rows(roots);
 async function call(method,path){const r=await fetch(path,{method});let v=null;try{v=await r.json()}catch(e){}
  if(!r.ok)throw new Error(v&&typeof v.error==='string'?v.error:'HTTP '+r.status);return v}
 const kept=n=>data.tree.roots.find(r=>r.number===n);
-function choose(){want++;if(sel!==foldsOf){unfolded.clear();foldsOf=sel}const r=sel===null?null:kept(sel);last=[r,null];shown=detail(r,null);fade($('#det'),shown);ring();if(sel!==null)fresh(sel)}
-function draw(r,note){last=[r,note];const k=detail(r,note);if(k===shown)return;shown=k;
+const latest=n=>walks[n]?walks[n].root:kept(n);
+function reset(fam){unfolded.clear();relMore.clear();foldsOf=fam}
+function choose(){want++;if(sel!==foldsOf)reset(sel);const r=sel===null?null:kept(sel);reveal(r);last=[r,null];shown=detail(r,null);fade($('#det'),shown);ring();aimAt();if(sel!==null)fresh(sel)}
+function draw(r,note){reveal(r);last=[r,note];const k=detail(r,note);if(k===shown)return aimAt();shown=k;
  const d=$('#det'),back=hold(d),o=d.querySelector('.ring .fg'),from=o&&getComputedStyle(o).strokeDashoffset,t=document.createElement('template');
  t.innerHTML=k;d.replaceChildren(...t.content.firstElementChild.childNodes);back();
- const f=d.querySelector('.ring .fg');if(f&&from)f.style.strokeDashoffset=from;ring()}
+ const f=d.querySelector('.ring .fg');if(f&&from)f.style.strokeDashoffset=from;ring();aimAt()}
+const trail=(n,t,p=[])=>{p.push(n);if(n.number===t||n.children.some(c=>trail(c,t,p)))return p;p.pop();return null};
+function reveal(r){if(!aim||!r||r.number!==aim.fam)return;const p=trail(r,aim.n)||[];for(let i=1;i<p.length;i++)if(finished(p[i])){unfolded.add(p[i-1].number);break}}
+function aimAt(){if(!aim||sel!==aim.fam)return;const gone=Date.now()-aim.t0;if(gone>1600)return;
+ const el=aim.head?$('#det h3'):by('n',String(aim.n));if(!el)return;el.classList.add('hit');clearTimeout(aim.off);aim.off=setTimeout(()=>el.classList.remove('hit'),1600-gone);
+ if(!aim.done){aim.done=true;go(el);el.scrollIntoView({block:'nearest'})}}
+function jump(t){const r=last[0];if(!r)return;const w=trail(r,t)?null:where(t),R=w?w.root.number:r.number,away=R!==sel;
+ if(away){const root=kept(R);if(!root)return;if(!showAll&&finished(root))showAll=true;sel=R;reset(R)}
+ clearTimeout(aim&&aim.off);aim={n:t,fam:R,head:t===R,t0:Date.now()};if(away){relist();choose()}else draw(...last)}
+function more(k){relMore.add(k);draw(...last);const r=[...$('#det').querySelectorAll('[data-k]')].find(e=>e.dataset.k===k),n=r&&r.querySelectorAll('[data-j]')[5];if(n)go(n)}
 const q=()=>repo===null?'':'?repo='+encodeURIComponent(repo);
 async function fresh(n){const t=++want;let r;
  try{r=(await call('GET','/api/tree/'+n+q())).roots[0]}
- catch(e){if(t!==want)return;const w=walks[n];draw(w?w.root:kept(n),(w?'Showing the read of this family at '+clock(w.at):'Showing the last full read')+': '+e.message);return}
+ catch(e){if(t!==want)return;const w=walks[n];draw(latest(n),(w?'Showing the read of this family at '+clock(w.at):'Showing the last full read')+': '+e.message);return}
  if(t!==want||!r)return;walks[n]={root:r,at:Date.now()};draw(r)}
 const busy=()=>$('#rf').classList.contains('busy');
 function button(on,label,ok=false){clearTimeout(flash);const b=$('#rf');b.classList.toggle('busy',on);b.classList.toggle('ok',ok);b.querySelector('span').textContent=label}
@@ -182,7 +211,7 @@ function current(){[...$('#tabs').children].forEach(b=>{const on=b.dataset.r===r
 async function tabs(){if(!repos.length)return;clearTimeout(tabTimer);let v;try{v=await call('GET','/api/repos')}catch(e){return}
  v.repos.forEach(tab);clearTimeout(tabTimer);if(v.repos.some(r=>r.state==='reading'))tabTimer=setTimeout(tabs,1500)}
 function named(){let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}return repos.includes(h)?h:null}
-function show(n){repo=n;gen++;want++;data=null;sel=null;walks={};unfolded.clear();foldsOf=null;last=[null,null];shown=null;listed=null;
+function show(n){repo=n;gen++;want++;data=null;sel=null;walks={};reset(null);aim=null;last=[null,null];shown=null;listed=null;
  $('#err').hidden=true;$('#m').innerHTML='<div class="empty">Reading…</div>';button(false,'Refresh');stamp();current();load()}
 async function boot(){let v=null;try{v=await call('GET','/api/repos')}catch(e){}
  repos=v&&Array.isArray(v.repos)?v.repos.map(r=>String(r.name)):[];
@@ -198,7 +227,9 @@ function done(){showDone=!showDone;sync();if(data)draw(...last)}
 $('#rf').onclick=()=>{if(busy())return;button(true,'Reading…');ask('POST','/api/refresh'+q(),'The refresh failed: ')};
 function unfold(u){unfolded.add(+u.dataset.u);draw(...last)}
 $('#m').onclick=e=>{const u=e.target.closest('[data-u]');if(u){unfold(u);return}
- const s=e.target.closest('[data-s]');if(s){const n=+s.dataset.s;if(n===sel){fresh(n);return}sel=n;moveHl();choose()}};
+ const j=e.target.closest('[data-t]');if(j){jump(+j.dataset.t);return}
+ const g=e.target.closest('[data-g]');if(g){more(g.dataset.g);return}
+ const s=e.target.closest('[data-s]');if(s){aim=null;const n=+s.dataset.s;if(n===sel){fresh(n);return}sel=n;moveHl();choose()}};
 addEventListener('resize',()=>moveHl(true));
 boot();
 </script></body></html>

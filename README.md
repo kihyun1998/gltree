@@ -78,10 +78,11 @@ gltree tree 12 --snapshot tracker.json --json   # the same tree as JSON
 ```
 
 Each node shows its state, `closed/total` of its descendants when it has any, and
-`blocked by #B` while a blocker is open. `--json` prints `{"version": 3, "roots": [node]}`, where a
-node is `{number, title, state, url, labels, extra, closed, total, blocked_by_open, children}`. `url` is
-`null` when the source did not record it (an older snapshot), and `extra` holds the header's `[extra]`
-values, as `roots --json` gives them.
+`blocked by #B` while a blocker is open. `--json` prints `{"version": 4, "roots": [node]}`, where a
+node is `{number, title, state, url, labels, extra, closed, total, blocked_by_open, related, from, blocks,
+children}`. `url` is `null` when the source did not record it (an older snapshot), and `extra` holds the
+header's `[extra]` values, as `roots --json` gives them. `related`, `from` (a number or `null`) and
+`blocks` are the header's own values, as written; a header out of form gives `[]`, `null` and `[]`.
 
 Every root's tree (`gltree tree` with no number) reads every item and leaves out a family whose
 every item is closed: the root and everything drawn under it, a lone closed root included. A family
@@ -288,7 +289,13 @@ children in ascending order, with every item linked to its page on the server; e
 most three labels and a `+k` chip naming the rest. A mark tells an item to do (a ring), blocked by
 an open item (a ring with a bar) and done (a check) apart, in the list, the detail and the tree.
 Under each item, children whose whole subtree is closed fold into one `✓ N done — show` row that
-unfolds them; the "Show done items" switch unfolds them all. The refresh button reads the
+unfolds them; the "Show done items" switch unfolds them all. Under the detail's head, a relations
+box gathers the family's `related`, `from` ("Found while working on") and `blocks`, the root's and
+every item's under it: each row shows the target's mark, number and title, `#S →` when the relation
+is item S's rather than the root's, and `in #R` when the target is in family R; each group shows five
+rows and folds the rest behind `N more`, and a family with none has no box. Choosing a row goes to
+the target: it selects the target's family, turning "Finished families" on when that family is
+hidden, unfolds the fold that hides it, and marks it briefly. The refresh button reads the
 whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
 the token stays in the server process.
@@ -314,15 +321,15 @@ keeps taking its tracker from the clone it runs in.
 
 The page reads a small JSON API:
 
-- `GET /api/repos`: `{"version": 3, "repos": [{"name", "state", "error", "read_at", "families",
+- `GET /api/repos`: `{"version": 4, "repos": [{"name", "state", "error", "read_at", "families",
   "open"}]}`, the registered repos in the order they were registered; `families` and `open` count
   the families and open items of the last full read that succeeded, `null` until one has. With no
   repo registered, or with `--snapshot`, `repos` is empty.
-- `GET /api/families`: `{"version": 3, "repo", "state", "error", "read_at", "badges", "tree"}`. `repo`
+- `GET /api/families`: `{"version": 4, "repo", "state", "error", "read_at", "badges", "tree"}`. `repo`
   is the repo's name, `null` with no repo registered. `state` is
   `reading` while a full read runs, `ready` when the last one succeeded and `failed` when it failed,
   with `error` saying why (`null` otherwise). `tree` is the last full read that succeeded, as
-  `gltree tree --all --json` (version 3) gives it, and `read_at` its UTC time; both are `null` until
+  `gltree tree --all --json` (version 4) gives it, and `read_at` its UTC time; both are `null` until
   one has. `badges` is the repo config's list.
 - `POST /api/refresh`: reads the whole tracker again and answers the same shape. While a read runs it
   answers that shape at once, `state` `reading`, and starts nothing.
@@ -333,7 +340,7 @@ With repos registered, `/api/families`, `/api/refresh` and `/api/tree/N` name on
 `?repo=NAME`, compared as sent: without it they answer 400, and 404 for a name not registered. With
 none registered they take no `repo` and answer 404 to one.
 
-An error answers `{"version": 3, "error"}`: 404 for an unknown path or number, 405 (with
+An error answers `{"version": 4, "error"}`: 404 for an unknown path or number, 405 (with
 `Allow`) for a known path asked with another method, 400 and 413 for a request it cannot read or a
 body it does not take, 502 when the tracker could not be read. The server answers only requests
 addressed to `127.0.0.1` or `localhost` at its port (403 otherwise), and the API only its own page:

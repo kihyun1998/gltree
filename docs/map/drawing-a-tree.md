@@ -36,8 +36,8 @@ the server one depth at a time.
 - **A cycle ends where the path meets itself**: each node carries the items from the root down to it,
   not every item seen, so counts follow each path (`node`). This matched the Python tool's per-path
   counting (commit 2a78fa5, 2026-10-21).
-- **JSON** version 3: `{version, roots: [node]}`, `node = {number, title, state, url, labels, extra,
-  closed, total, blocked_by_open, children}`. Titles are printed raw. Every node carries `url`,
+- **JSON** version 4: `{version, roots: [node]}`, `node = {number, title, state, url, labels, extra,
+  closed, total, blocked_by_open, related, from, blocks, children}`. Titles are printed raw. Every node carries `url`,
   `labels` and `extra` in every mode, so a caller can link a node or show its labels and a
   consumer's marker without reading the tracker again (#26). `url` is `null` when the source did not
   record it; `labels` is a list, so a snapshot saved before labels were kept reads as `[]`, not as
@@ -45,6 +45,14 @@ the server one depth at a time.
   `[extra]` key is taken whether or not the repo config declares it, and a header out of form gives
   `{}`. The walk gets `url` and `labels` from `level`, which asks them for each item and each linked
   item ([reading-the-server](reading-the-server.md)).
+- **`related`, `from` and `blocks` are the header's values as written** (#47, maintainer,
+  2026-11-24): read with `header::loose` in the same pass as `extra`, so a header out of form gives
+  `[]`, `null` and `[]`, while `blocked_by_open` still reads through `refs_of`, which skips only the
+  value out of form. `blocks` is the derived list the header keeps in step with the other ends'
+  `blocked_by` ([keeping-the-derived-lists](keeping-the-derived-lists.md)); nothing is computed in
+  reverse, so a `blocks` not yet synced shows as the header holds it. A target is a number only: its
+  state and title are for the reader to find in the same read or another. The text output does not
+  show them. Version 4 because a field was added ([the-command-line-contract](the-command-line-contract.md)).
 - **Goldens**: `tests/golden/tree-*.txt` for `tests/fixtures/tracker.json`, stored LF and pinned by
   `.gitattributes`; gltree prints LF everywhere. They were printed by the consumers' Python tool
   (commit 2a78fa5), which is deleted; a deliberate output change is reviewed and the goldens are
@@ -75,7 +83,7 @@ the server one depth at a time.
 - [reading-the-server](reading-the-server.md) — the walk's cost and correctness rest on `level`: 100 items a request, and an overflow of linked items, or of one item's labels, is an error rather than a short tree.
 - [writing-the-tree](writing-the-tree.md) — `move` refuses a cycle through `subtree`; a walk that misses children lets a move under its own descendant through.
 - [the-command-line-contract](the-command-line-contract.md) — the text and `--json` are read by outside skills.
-- [serving-the-viewer](serving-the-viewer.md) — the page reads the JSON node and copies the finished-family rule (`with_open_work`) into its `finished`.
+- [serving-the-viewer](serving-the-viewer.md) — the page reads the JSON node and copies the finished-family rule (`with_open_work`) into its `finished`; its relations box reads `related`, `from` and `blocks`.
 
 ## Known holes / open
 - An item with more than 100 links cannot be walked; the error says to draw it from a snapshot.

@@ -117,7 +117,7 @@ reasons below.
   `no-referrer` and a CSP allowing only the page's inline script and style and `connect-src 'self'`.
   `/api/repos` is under `/api/`, so the same checks hold for it, and a repo name is never a path:
   the server looks it up among the registered names and opens only the clone path the list holds.
-- **JSON**: `/api/repos`, `/api/families` and errors carry `serve::JSON_VERSION` 3 (2 before #45) —
+- **JSON**: `/api/repos`, `/api/families` and errors carry `serve::JSON_VERSION` 4 (3 before #47, 2 before #45) —
   `{version, repos: [{name, state, error, read_at, families, open}]}`, `{version, repo, state, error,
   read_at, badges, tree}` and `{version, error}`; `repos` is the registered repos in the order they
   were registered, empty with none registered or with `--snapshot`, and `families` and `open` count
@@ -173,6 +173,29 @@ reasons below.
   in a browser that focuses a clicked button, as Chromium does (#41's lens review, CDP mouse input:
   focus moved, `:focus-visible` false, so no ring shows). The move is the redraw's focus rule below:
   the fold row has no counterpart, and the first revealed row stands where it stood (#37).
+- **The relations box** (#47: the maintainer picked variant 2 of three, run on a real tracker of
+  about 2,800 items, 2026-11-24; there 96 of 106 `related` links and 114 of 153 `from` pointed into
+  another family). Under the detail's head, `rels` gathers the `related`, `from` and `blocks` of
+  every node of the drawn family, the root's first and then each item's in the tree's order, into
+  three groups, Related, Found while working on, Blocks, each left out when empty, and the whole box
+  left out when all three are. A row is the target's mark, number and title, `#S →` before it when
+  the relation is item S's rather than the root's, and `in #R` after it when the target's family is
+  not the drawn one. A target in the drawn family is read from it; one in another family from the
+  kept full read (`where`, an index of `data.tree` built once per full read), which holds every
+  family, finished ones included. A target in neither (deleted, or newer than the full read) shows
+  its number alone and is not a button (worker's judgement, 2026-11-24: there is nothing to go to).
+  Each group shows its first 5 rows and a `N more` button that shows the rest (`relMore`, emptied
+  with `unfolded` when the family changes); it moves focus to the first row it revealed, as an
+  unfold does. Choosing a row goes to the target (`jump`): another family is selected, with "Finished
+  families" turned on first when that family is finished and hidden, and its folds reset as any new
+  selection's are (`reset`). The target stays the page's aim (`aim`) until a family row is clicked,
+  another jump is made or the tab changes: every detail drawn for its family, the full read's first
+  and the walk's after it, first unfolds the parent of the first finished item on the path from the
+  root to the target (`reveal`, `trail`), the one fold that hides it, so a walk that finds the
+  target newly closed does not fold it away again (#47's bug review). The target's tree row, or the
+  detail's title when the target is the family's root, is focused once, scrolled into view and
+  marked with `hit` for 1.6 s (`aimAt`), the mark put back on each redraw within that time. The
+  title is a counterpart of its own in `hold`, so a redraw keeps focus on it (#47's spec review).
 - **Repo tabs** (#45: the maintainer picked variant A of three, run on a real tracker of about 630
   families plus two synthetic repos, 2026-11-24). With repos registered, a row of tabs above the hero
   (`#tabs`, a `nav` of buttons) names each repo in the order `/api/repos` gives, with its open items
@@ -279,7 +302,8 @@ reasons below.
   items" switch), note before they redraw whether focus is inside what they replace (`hold`), and
   afterwards focus its counterpart in what was drawn (`go`), by a key that survives the redraw: a
   family row by its number (`data-s`), a tree row by its item number (`data-n`), a fold row by its
-  parent's number (`data-u`), "Open in GitLab" by its class, and the detail itself by its id. Keys
+  parent's number (`data-u`), a relations-box row by its group, source and target (`data-j`), a
+  group's `N more` by its group (`data-g`), "Open in GitLab" by its class, and the detail itself by its id. Keys
   are compared as strings against `dataset`, never put into a selector, so a number the tracker
   sends cannot change what is looked up; the search covers only `#rows` and `#det`, which a fading
   ghost no longer carries as its id. Where the counterpart is gone, focus goes to a fallback (worker's
@@ -367,6 +391,21 @@ reasons below.
   Three mutations were each seen failing their check: no `gen` guard in `ask`, no `replaceState`, and
   the tab row rebuilt on every update. The stand-in answered a walk with the page shape, so a walked
   tree drew the stale note; the walk itself is #30's, unchanged here.
+- #47's box was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving ten
+  families, one with relations from its root and two items, an XSS title among the targets, a
+  finished family and folded done items (2026-11-24): the three groups and their labels, 5 rows and
+  `4 more` of 9, `#S →` and `in #R`, the box under the head, the title rendered as text, no box on a
+  family without relations, `N more` showing all and moving focus to the sixth row, focus on a box
+  row kept through a redraw that changes the markup, a jump into a fold of the same family, a jump
+  in the same family, the mark gone after 1.6 s, a jump into another family's fold with the list's
+  highlight moved, a jump to a finished family's root turning "Finished families" on, and no mark
+  left after selecting another family. Seven mutations were each seen failing their check: no switch
+  turned on, no unfold, `data-j` and `data-g` dropped from `hold`, no fold at 5, no `#S →`, no focus
+  on the target, and the mark kept after a family row is clicked. After the review, with a walk held
+  400 ms: the target shown in the full read's first frame and still shown when the walk returns it
+  closed, and focus kept on the title when the walk renames the root; each seen failing with
+  `reveal` left out of `draw`, then of `choose`, and with the title dropped from `hold`. The reduced-motion rule was read,
+  not run: the box adds no transition or animation.
 - Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).

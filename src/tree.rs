@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The version of the JSON shape `to_json` prints.
-pub const JSON_VERSION: u32 = 3;
+pub const JSON_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
@@ -24,6 +24,12 @@ pub struct Node {
     pub total: usize,
     /// The items its `blocked_by` names that are still open.
     pub blocked_by_open: Vec<u64>,
+    /// The header's `related`, as written.
+    pub related: Vec<u64>,
+    /// The header's `from`: the item this one was found while working on.
+    pub from: Option<u64>,
+    /// The header's `blocks`, the derived list kept in step with the other ends' `blocked_by`.
+    pub blocks: Vec<u64>,
     pub children: Vec<Node>,
 }
 
@@ -175,16 +181,20 @@ fn node(
         .iter()
         .map(|c| usize::from(c.state == State::Closed) + c.closed)
         .sum();
+    let h = header::loose(&it.desc).header.unwrap_or_default();
     Node {
         iid: n,
         title: it.title.clone(),
         state: it.state,
         url: it.url.clone(),
         labels: it.labels.clone(),
-        extra: header::extra_json(&header::loose(&it.desc).header.unwrap_or_default()),
+        extra: header::extra_json(&h),
         closed,
         total,
         blocked_by_open: open_blockers(&it.desc, states),
+        related: h.related,
+        from: h.from,
+        blocks: h.blocks,
         children,
     }
 }
@@ -232,6 +242,7 @@ fn node_json(n: &Node) -> Value {
         "url": n.url, "labels": n.labels, "extra": n.extra,
         "closed": n.closed, "total": n.total,
         "blocked_by_open": n.blocked_by_open,
+        "related": n.related, "from": n.from, "blocks": n.blocks,
         "children": n.children.iter().map(node_json).collect::<Vec<_>>(),
     })
 }
@@ -257,7 +268,7 @@ mod tests {
         let lines = draw(items.clone(), Some(1));
         assert_eq!(lines[2], "  #3 [open] t3  1/2  blocked by #5");
         let v = to_json(&tree(&FakeTracker::new(items), &FrontMatter, Some(1)).unwrap());
-        assert_eq!(v["version"], 3);
+        assert_eq!(v["version"], 4);
         assert_eq!(v["roots"][0]["children"][1]["blocked_by_open"], json!([5]));
     }
 
@@ -464,21 +475,40 @@ mod tests {
     }
 
     #[test]
+    fn every_node_carries_related_from_and_blocks_as_its_header_records_them() {
+        let mut items = three_levels();
+        items[4].desc = "+++\nparent = 3\nfrom = 9\nrelated = [2, 8]\nblocks = [4]\n+++\n".into();
+        let v = to_json(&tree(&FakeTracker::new(items), &FrontMatter, Some(3)).unwrap());
+        let (four, five) = (&v["roots"][0]["children"][0], &v["roots"][0]["children"][1]);
+        assert_eq!(
+            (&five["related"], &five["from"], &five["blocks"]),
+            (&json!([2, 8]), &json!(9), &json!([4]))
+        );
+        assert_eq!(
+            (&four["related"], &four["from"], &four["blocks"]),
+            (&json!([]), &json!(null), &json!([]))
+        );
+    }
+
+    #[test]
     fn json_nests_the_same_tree_under_a_version() {
         let v = to_json(&tree(&FakeTracker::new(three_levels()), &FrontMatter, Some(3)).unwrap());
         assert_eq!(
             v,
             json!({
-                "version": 3,
+                "version": 4,
                 "roots": [{
                     "number": 3, "title": "t3", "state": "open", "url": null, "labels": [], "extra": {},
                     "closed": 1, "total": 2, "blocked_by_open": [],
+                    "related": [], "from": null, "blocks": [],
                     "children": [
                         {"number": 4, "title": "t4", "state": "closed",
                          "url": "https://gitlab.example.com/team/app/-/issues/4", "labels": ["bug", "ui"], "extra": {},
-                         "closed": 0, "total": 0, "blocked_by_open": [], "children": []},
+                         "closed": 0, "total": 0, "blocked_by_open": [],
+                         "related": [], "from": null, "blocks": [], "children": []},
                         {"number": 5, "title": "t5", "state": "open", "url": null, "labels": [], "extra": {"marker": "K-1"},
-                         "closed": 0, "total": 0, "blocked_by_open": [], "children": []}
+                         "closed": 0, "total": 0, "blocked_by_open": [],
+                         "related": [], "from": null, "blocks": [], "children": []}
                     ]
                 }]
             })
