@@ -297,8 +297,9 @@ the token stays in the server process.
 PATH` registers the clone at PATH in `~/.gltree/repos.toml` (`~` being your home folder,
 `%USERPROFILE%` on Windows), under the last part of its GitLab project's path unless `--name` gives
 another; a name is 1 to 64 letters, digits, `.`, `_` or `-`. It refuses a path that is not a git
-clone, a clone whose `origin` names no GitLab project and a name already taken, and does not need a
-`.gltree.toml`. `gltree serve list` prints `NAME  PATH` per repo in the order they were registered,
+clone, a clone whose `origin` gives no host and project path, and a name already taken, and does not
+need a `.gltree.toml`. It does not ask the host whether it is GitLab: a repo whose host is not shows
+why in its tab when `serve` reads it. `gltree serve list` prints `NAME  PATH` per repo in the order they were registered,
 and `gltree serve remove NAME` takes one off. With at least one repo registered, `gltree serve` shows
 every one of them wherever it runs, and reads each clone's `origin`, `.gltree.toml` and glab login
 as it would inside it: a row of tabs above the page names each repo with its open items (`app 78

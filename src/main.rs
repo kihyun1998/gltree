@@ -235,9 +235,10 @@ Requirements:
 ",
             "
 Exit status:
-  0 on success; 2 when PATH is not a git clone, its origin names no GitLab
-  project, NAME is taken or is not 1 to 64 letters, digits, `.`, `_` or
-  `-`, or the list cannot be read or written, with the reason on stderr."
+  0 on success; 2 when PATH is not a git clone, its origin gives no host and
+  project path (whether the host is GitLab shows when serve reads it), NAME
+  is taken or is not 1 to 64 letters, digits, `.`, `_` or `-`, or the list
+  cannot be read or written, with the reason on stderr."
         )
     )]
     Add {

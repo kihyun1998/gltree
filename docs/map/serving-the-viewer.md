@@ -23,8 +23,11 @@ reasons below.
   clone it runs in, so the skills and scripts that call gltree inside clones are unchanged. `serve add
   PATH [--name N]`, `serve list` and `serve remove N` keep it (`main::serve_command`): `add` stores
   the clone's top folder (`repos::clone_at`, through `config::toplevel`), named by the last part of
-  its project path (`repos::default_name`), and refuses a path outside a git clone, an `origin` naming
-  no GitLab project and a name taken; it needs no `.gltree.toml`, since `serve` runs without one. A
+  its project path (`repos::default_name`), and refuses a path outside a git clone, an `origin` that
+  gives no host and project path, and a name taken; it needs no `.gltree.toml`, since `serve` runs
+  without one. It reads the remote only and asks no server, so a host that is not GitLab (a GitHub
+  `origin`) registers and its tab fails at the first read, naming why (#45's lens review; seen by the
+  conductor, 2026-11-24: no glab token for github.com). A
   name is 1 to 64 ASCII letters, digits, `.`, `_` or `-` (`repos::name_error`; worker's judgement,
   2026-11-24): the characters a GitLab project path's last part takes, which `encodeURIComponent`
   leaves as they are, so `?repo=` and the address after `#` carry a name unchanged and the server
