@@ -13,12 +13,15 @@ the walk this adapter serves, not the adapter.
 ## Design model
 - **The port** (`Tracker`): `all_items`, `item_with_comments`, `level`, `create_item`, `add_link`,
   `set_desc`, `remove_link`. `GitLab`, `SnapshotFile` (read only) and `FakeTracker` implement it.
-- **Project and host** from `git remote get-url origin`: `https://[user@]host[:port]/path[.git]`,
+- **Project and host** from `git remote get-url origin` of the clone gltree runs in, or, for `serve`
+  with repos registered, of each registered clone (`server_in`, #45): `https://[user@]host[:port]/path[.git]`,
   `ssh://user@host[:port]/path[.git]`, `user@host:path[.git]` (`Remote::parse`).
 - **Login** from glab's config, in glab's own search order: `GLAB_CONFIG_DIR/config.yml` alone when set,
   else `~/.config/glab-cli/config.yml`, then the platform directory (`XDG_CONFIG_HOME`, else
   `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS). From `hosts.<host>`:
-  `token`, `ca_cert`, `api_host`, `api_protocol`. `GITLAB_TOKEN` and `GLTREE_CA_CERT` override them.
+  `token`, `ca_cert`, `api_host`, `api_protocol`. `GITLAB_TOKEN` and `GLTREE_CA_CERT` override them,
+  for every host: a `serve` showing registered repos on several hosts sends that one token to each
+  (#45's security review, 2026-11-24, as documented in `login::TOKEN_ENV`).
   The first candidate that is there is read; one that is not there (`NotFound`) moves on to the next,
   and one that is there and cannot be read (a directory, no permission) fails naming its path, as
   `RepoConfig::of_clone` treats only `NotFound` as absent (#29). It fails with `GITLAB_TOKEN` set too,
@@ -74,7 +77,7 @@ the walk this adapter serves, not the adapter.
 - `src/login.rs — Login, TOKEN_ENV, CA_ENV, glab_config_paths, read_glab_config, login`
 - `src/gitlab.rs — GitLab::new, GitLab::graphql, GitLab::rest, GitLab::call, Tracker for GitLab, LEVEL_BATCH, level_query, parse_level, page_query, parse_page, next_cursor, brief, answer, created, linked, link_id, encode_path`
 - `src/macos_tls.rs — agent, parse_ca_ders, PinnedVerifier, check_name_and_validity, host_matches, PinnedConnector, PinnedTlsTransport`
-- `src/main.rs — server, source`
+- `src/main.rs — server, server_in, source`
 - `Cargo.toml — ureq features, the macOS-only rustls and x509-parser dependencies`
 
 ## Reference behaviour

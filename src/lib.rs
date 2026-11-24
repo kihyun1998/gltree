@@ -11,6 +11,7 @@ pub mod login;
 pub mod macos_tls;
 pub mod migrate;
 pub mod remote;
+pub mod repos;
 pub mod roots;
 pub mod scheme;
 pub mod serve;

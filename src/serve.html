@@ -70,6 +70,11 @@ a.node:hover .go{opacity:1}
 .badge.val{color:var(--done);border-color:color-mix(in srgb,var(--done) 35%,transparent);background:color-mix(in srgb,var(--done) 8%,transparent)}
 .banner{margin:0 0 22px;padding:12px 16px;border-radius:12px;border:1px solid color-mix(in srgb,var(--warn) 40%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--warn)}
 .stale{font-size:12px;color:var(--warn);margin-top:14px}
+.tabs{flex:none;display:flex;flex-wrap:wrap;gap:8px;margin:0 0 24px}
+.tab{display:flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--hair);border-radius:999px;background:var(--surface);font-size:13px;color:var(--sub)}
+.tab:hover{box-shadow:0 2px 10px rgba(0,0,0,.06)}.tab.on{color:var(--ink);border-color:color-mix(in srgb,var(--ink) 55%,transparent)}
+.tab .n{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums}.tab .n.none{color:var(--done)}
+.dot{width:7px;height:7px;border-radius:50%;flex:none}.dot.reading{background:var(--accent)}.dot.failed{background:var(--warn)}
 </style></head><body>
 <div class="top"><div class="in">
  <span class="logo">gltree</span>
@@ -79,9 +84,9 @@ a.node:hover .go{opacity:1}
  <button class="refresh" id="rf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Refresh</span></button>
  <span class="stamp" id="at"></span>
 </div></div>
-<main><p class="banner" id="err" hidden></p><div id="m"><div class="empty">Reading…</div></div></main>
+<main><nav class="tabs" id="tabs" aria-label="Repos" hidden></nav><p class="banner" id="err" hidden></p><div id="m"><div class="empty">Reading…</div></div></main>
 <script>
-let data=null,showAll=false,showDone=false,unfolded=new Set(),foldsOf=null,sel=null,last=[null,null],shown=null,listed=null,want=0,walks={},flash=0;
+let repos=[],repo=null,gen=0,tabTimer=0,data=null,showAll=false,showDone=false,unfolded=new Set(),foldsOf=null,sel=null,last=[null,null],shown=null,listed=null,want=0,walks={},flash=0;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeUrl=u=>{if(typeof u!=='string')return null;try{const x=new URL(u);return x.protocol==='http:'||x.protocol==='https:'?x.href:null}catch(e){return null}};
@@ -152,8 +157,9 @@ function draw(r,note){last=[r,note];const k=detail(r,note);if(k===shown)return;s
  const d=$('#det'),back=hold(d),o=d.querySelector('.ring .fg'),from=o&&getComputedStyle(o).strokeDashoffset,t=document.createElement('template');
  t.innerHTML=k;d.replaceChildren(...t.content.firstElementChild.childNodes);back();
  const f=d.querySelector('.ring .fg');if(f&&from)f.style.strokeDashoffset=from;ring()}
+const q=()=>repo===null?'':'?repo='+encodeURIComponent(repo);
 async function fresh(n){const t=++want;let r;
- try{r=(await call('GET','/api/tree/'+n)).roots[0]}
+ try{r=(await call('GET','/api/tree/'+n+q())).roots[0]}
  catch(e){if(t!==want)return;const w=walks[n];draw(w?w.root:kept(n),(w?'Showing the read of this family at '+clock(w.at):'Showing the last full read')+': '+e.message);return}
  if(t!==want||!r)return;walks[n]={root:r,at:Date.now()};draw(r)}
 const busy=()=>$('#rf').classList.contains('busy');
@@ -161,19 +167,38 @@ function button(on,label,ok=false){clearTimeout(flash);const b=$('#rf');b.classL
 function keep(v){if(!data&&v.tree){data=v;paint()}}
 function stop(m){button(false,'Refresh');if(!data)$('#m').innerHTML='';fail(m)}
 function take(v){const was=busy();
- if(v.state==='reading'){keep(v);if(!was)button(true,'Reading…');setTimeout(load,1000);return}
+ if(v.state==='reading'){keep(v);if(!was)button(true,'Reading…');const g=gen;setTimeout(()=>{if(g===gen)load()},1000);return}
+ tabs();
  if(v.state==='failed'){keep(v);stop((data?'The refresh failed: ':'The read failed: ')+v.error);return}
  button(false,was?'Up to date':'Refresh',was);data=v;walks={};$('#err').hidden=true;paint();
  if(was)flash=setTimeout(()=>button(false,'Refresh'),1400)}
-async function ask(method,path,lead){try{take(await call(method,path))}catch(e){stop(lead+e.message)}}
-function load(){ask('GET','/api/families','Cannot read the families: ')}
+async function ask(method,path,lead){const g=gen;let v;try{v=await call(method,path)}catch(e){if(g===gen){stop(lead+e.message);tabs()}return}if(g===gen)take(v)}
+function load(){ask('GET','/api/families'+q(),'Cannot read the families: ')}
+function tab(r){const b=[...$('#tabs').children].find(b=>b.dataset.r===r.name);if(!b)return;
+ b.querySelector('.n').outerHTML=r.open==null?'<span class="n"></span>':'<span class="n'+(r.open?'':' none')+'">'+esc(r.open)+' left</span>';
+ const d=b.querySelector('.dot'),k=r.state==='ready'?'':r.state;d.className='dot '+k;d.hidden=!k;
+ d.setAttribute('aria-label',k==='failed'?'read failed':'reading');b.title=k==='failed'?String(r.error):''}
+function current(){[...$('#tabs').children].forEach(b=>{const on=b.dataset.r===repo;b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')})}
+async function tabs(){if(!repos.length)return;clearTimeout(tabTimer);let v;try{v=await call('GET','/api/repos')}catch(e){return}
+ v.repos.forEach(tab);clearTimeout(tabTimer);if(v.repos.some(r=>r.state==='reading'))tabTimer=setTimeout(tabs,1500)}
+function named(){let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}return repos.includes(h)?h:null}
+function show(n){repo=n;gen++;want++;data=null;sel=null;walks={};unfolded.clear();foldsOf=null;last=[null,null];shown=null;listed=null;
+ $('#err').hidden=true;$('#m').innerHTML='<div class="empty">Reading…</div>';button(false,'Refresh');stamp();current();load()}
+async function boot(){let v=null;try{v=await call('GET','/api/repos')}catch(e){}
+ repos=v&&Array.isArray(v.repos)?v.repos.map(r=>String(r.name)):[];
+ if(!repos.length){load();return}
+ const t=$('#tabs');t.innerHTML=repos.map(n=>'<button class="tab" data-r="'+esc(n)+'"><span class="dot" role="img" hidden></span><span>'+esc(n)+'</span><span class="n"></span></button>').join('');t.hidden=false;
+ v.repos.forEach(tab);if(v.repos.some(r=>r.state==='reading'))tabTimer=setTimeout(tabs,1500);
+ t.onclick=e=>{const b=e.target.closest('[data-r]');if(b)location.hash=encodeURIComponent(b.dataset.r)};
+ addEventListener('hashchange',()=>{const n=named();if(n!==null&&n!==repo)show(n)});
+ const n=named()??repos[0];if(named()===null)history.replaceState(null,'','#'+encodeURIComponent(n));show(n)}
 function toggle(){showAll=!showAll;sync();relist()}
 function done(){showDone=!showDone;sync();if(data)draw(...last)}
 [[$('#sw'),toggle],[$('#sd'),done]].forEach(([s,f])=>{s.onclick=f;s.onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();f()}}});
-$('#rf').onclick=()=>{if(busy())return;button(true,'Reading…');ask('POST','/api/refresh','The refresh failed: ')};
+$('#rf').onclick=()=>{if(busy())return;button(true,'Reading…');ask('POST','/api/refresh'+q(),'The refresh failed: ')};
 function unfold(u){unfolded.add(+u.dataset.u);draw(...last)}
 $('#m').onclick=e=>{const u=e.target.closest('[data-u]');if(u){unfold(u);return}
  const s=e.target.closest('[data-s]');if(s){const n=+s.dataset.s;if(n===sel){fresh(n);return}sel=n;moveHl();choose()}};
 addEventListener('resize',()=>moveHl(true));
-load();
+boot();
 </script></body></html>

@@ -158,7 +158,7 @@ fn bare_key(k: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-fn toplevel(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn toplevel(dir: &Path) -> Option<PathBuf> {
     let out = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(dir)

@@ -1,4 +1,5 @@
-//! The local viewer: a page and a small JSON API over the tracker, on 127.0.0.1 only.
+//! The local viewer: a page and a small JSON API over the tracker of the clone it runs in, or over
+//! every registered repo's, on 127.0.0.1 only.
 
 use crate::config::RepoConfig;
 use crate::tracker::{Error, Tracker};
@@ -10,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The version of the JSON shapes this module answers with, besides `/api/tree`'s, which is `tree`'s.
-pub const JSON_VERSION: u32 = 2;
+pub const JSON_VERSION: u32 = 3;
 pub const DEFAULT_PORT: u16 = 7420;
 const PAGE: &str = include_str!("serve.html");
 const HEAD_LIMIT: usize = 16 * 1024;
@@ -20,25 +21,41 @@ const BODY_LIMIT: u64 = 64 * 1024;
 /// handed to `App::start`.
 pub type Open = Box<dyn Fn() -> Result<Box<dyn Tracker + Send>, Error> + Send + Sync>;
 
-pub struct App {
+/// One tracker the server shows: how to open it, its repo config and its last full read.
+pub struct Repo {
+    name: Option<String>,
     open: Open,
     walk: bool,
     config: RepoConfig,
-    port: u16,
     kept: Mutex<Kept>,
+}
+
+/// The server: the tracker of the clone it runs in, or every registered repo.
+pub struct App {
+    repos: Vec<Repo>,
+    registered: bool,
+    port: u16,
 }
 
 #[derive(Default)]
 struct Kept {
     reading: bool,
-    read: Option<(String, Value)>,
+    read: Option<Done>,
     failed: Option<String>,
+}
+
+struct Done {
+    at: String,
+    tree: Value,
+    families: usize,
+    open: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct Request<'a> {
     method: &'a str,
     path: &'a str,
+    query: Option<&'a str>,
     host: Option<&'a str>,
     origin: Option<&'a str>,
     site: Option<&'a str>,
@@ -48,6 +65,7 @@ struct Request<'a> {
 struct Head<'a> {
     method: &'a str,
     path: &'a str,
+    query: Option<&'a str>,
     host: Option<&'a str>,
     origin: Option<&'a str>,
     site: Option<&'a str>,
@@ -99,33 +117,16 @@ struct Response {
     allow: Option<&'static str>,
 }
 
-impl App {
-    /// An app with nothing read yet; `start` makes the first read.
-    pub fn new(open: Open, walk: bool, config: RepoConfig, port: u16) -> App {
-        App {
+impl Repo {
+    /// A registered repo, shown under `name`, with nothing read yet.
+    pub fn named(name: String, open: Open, walk: bool, config: RepoConfig) -> Repo {
+        Repo {
+            name: Some(name),
             open,
             walk,
             config,
-            port,
             kept: Mutex::new(Kept::default()),
         }
-    }
-
-    /// Starts the first full read of `first` on its own thread and returns at once;
-    /// `/api/families` answers `reading` until it ends. `report` gets the number of families read,
-    /// or the error.
-    pub fn start(
-        self: &Arc<Self>,
-        first: Box<dyn Tracker + Send>,
-        report: impl FnOnce(Result<usize, Error>) + Send + 'static,
-    ) -> std::thread::JoinHandle<()> {
-        let begun = self.begin();
-        let app = Arc::clone(self);
-        std::thread::spawn(move || {
-            if begun {
-                report(app.finish(Some(first)));
-            }
-        })
     }
 
     fn refresh(&self) -> Result<Value, Error> {
@@ -140,7 +141,10 @@ impl App {
         !std::mem::replace(&mut kept.reading, true)
     }
 
-    fn finish(&self, first: Option<Box<dyn Tracker + Send>>) -> Result<usize, Error> {
+    fn finish(
+        &self,
+        first: Option<Result<Box<dyn Tracker + Send>, Error>>,
+    ) -> Result<usize, Error> {
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read_all(first)))
             .unwrap_or_else(|panic| {
                 let why = panic
@@ -157,12 +161,19 @@ impl App {
         kept.reading = false;
         match read {
             Ok(tree) => {
-                let families = tree["roots"].as_array().map_or(0, Vec::len);
+                let roots = tree["roots"].as_array().map_or(&[][..], Vec::as_slice);
+                let families = roots.len();
+                let open = roots.iter().map(open_items).sum();
                 let at = utc(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs());
-                kept.read = Some((at, tree));
+                kept.read = Some(Done {
+                    at,
+                    tree,
+                    families,
+                    open,
+                });
                 kept.failed = None;
                 Ok(families)
             }
@@ -173,9 +184,12 @@ impl App {
         }
     }
 
-    fn read_all(&self, first: Option<Box<dyn Tracker + Send>>) -> Result<Value, Error> {
+    fn read_all(
+        &self,
+        first: Option<Result<Box<dyn Tracker + Send>, Error>>,
+    ) -> Result<Value, Error> {
         let tracker = match first {
-            Some(t) => t,
+            Some(t) => t?,
             None => (self.open)()?,
         };
         let nodes = tree::tree(tracker.as_ref(), self.config.scheme().as_ref(), None)?;
@@ -186,29 +200,38 @@ impl App {
         self.kept.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn families(&self) -> Value {
-        self.families_of(&self.kept())
-    }
-
-    fn families_of(&self, kept: &Kept) -> Value {
-        let state = match (kept.reading, &kept.failed, &kept.read) {
+    fn state(kept: &Kept) -> &'static str {
+        match (kept.reading, &kept.failed, &kept.read) {
             (false, Some(_), _) => "failed",
             (false, None, Some(_)) => "ready",
             _ => "reading",
-        };
-        let (read_at, tree) = kept
-            .read
-            .as_ref()
-            .map_or((Value::Null, Value::Null), |(at, tree)| {
-                (json!(at), tree.clone())
-            });
+        }
+    }
+
+    fn families(&self) -> Value {
+        let kept = self.kept();
+        let state = Repo::state(&kept);
         json!({
             "version": JSON_VERSION,
+            "repo": self.name,
             "state": state,
             "error": if state == "failed" { json!(kept.failed) } else { Value::Null },
-            "read_at": read_at,
+            "read_at": kept.read.as_ref().map(|r| &r.at),
             "badges": self.config.badges,
-            "tree": tree,
+            "tree": kept.read.as_ref().map(|r| &r.tree),
+        })
+    }
+
+    fn summary(&self) -> Value {
+        let kept = self.kept();
+        let state = Repo::state(&kept);
+        json!({
+            "name": self.name,
+            "state": state,
+            "error": if state == "failed" { json!(kept.failed) } else { Value::Null },
+            "read_at": kept.read.as_ref().map(|r| &r.at),
+            "families": kept.read.as_ref().map(|r| r.families),
+            "open": kept.read.as_ref().map(|r| r.open),
         })
     }
 
@@ -221,6 +244,100 @@ impl App {
             tree::tree(tracker.as_ref(), scheme.as_ref(), Some(n))?
         };
         Ok(tree::to_json(&nodes))
+    }
+}
+
+fn open_items(node: &Value) -> usize {
+    usize::from(node["state"] == "open")
+        + node["children"]
+            .as_array()
+            .map_or(0, |c| c.iter().map(open_items).sum())
+}
+
+impl App {
+    /// An app over the tracker of the clone it runs in, with nothing read yet; `start` makes the
+    /// first read.
+    pub fn new(open: Open, walk: bool, config: RepoConfig, port: u16) -> App {
+        App {
+            repos: vec![Repo {
+                name: None,
+                open,
+                walk,
+                config,
+                kept: Mutex::new(Kept::default()),
+            }],
+            registered: false,
+            port,
+        }
+    }
+
+    /// An app over registered repos, each named, shown in the order given.
+    pub fn registered(repos: Vec<Repo>, port: u16) -> App {
+        App {
+            repos,
+            registered: true,
+            port,
+        }
+    }
+
+    /// Starts the first full read of the `repo`th repo on its own thread, from `first`, and
+    /// returns at once; its `/api/families` answers `reading` until it ends. `first` is an error
+    /// when the tracker could not be opened, and the read fails with it. `report` gets the number
+    /// of families read, or the error.
+    pub fn start(
+        self: &Arc<Self>,
+        repo: usize,
+        first: Result<Box<dyn Tracker + Send>, Error>,
+        report: impl FnOnce(Result<usize, Error>) + Send + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let begun = self.repos[repo].begin();
+        let app = Arc::clone(self);
+        std::thread::spawn(move || {
+            if begun {
+                report(app.repos[repo].finish(Some(first)));
+            }
+        })
+    }
+
+    fn repos_json(&self) -> Value {
+        let repos: Vec<Value> = if self.registered {
+            self.repos.iter().map(Repo::summary).collect()
+        } else {
+            vec![]
+        };
+        json!({ "version": JSON_VERSION, "repos": repos })
+    }
+
+    fn repo(&self, query: Option<&str>) -> Result<&Repo, Response> {
+        let mut named = query
+            .into_iter()
+            .flat_map(|q| q.split('&'))
+            .filter_map(|pair| pair.strip_prefix("repo="));
+        let (name, again) = (named.next(), named.next());
+        if again.is_some() {
+            return Err(error(Status::BadRequest, "name one repo with ?repo="));
+        }
+        match (self.registered, name) {
+            (false, None) => Ok(&self.repos[0]),
+            (false, Some(_)) => Err(error(
+                Status::NotFound,
+                "no repo is registered; this server shows the clone it runs in",
+            )),
+            (true, None) => Err(error(
+                Status::BadRequest,
+                "name a repo with ?repo=NAME; /api/repos lists them",
+            )),
+            (true, Some(name)) => self
+                .repos
+                .iter()
+                .find(|r| r.name.as_deref() == Some(name))
+                .ok_or_else(|| {
+                    error(
+                        Status::NotFound,
+                        &format!("no repo is registered as `{name}`"),
+                    )
+                }),
+        }
     }
 
     fn ours(&self, authority: &str) -> bool {
@@ -255,6 +372,10 @@ impl App {
         let get = req.method == "GET" || req.method == "HEAD";
         let post = req.method == "POST";
         const READ: &str = "GET, HEAD";
+        let on = |answer: &dyn Fn(&Repo) -> Response| match self.repo(req.query) {
+            Ok(repo) => answer(repo),
+            Err(refused) => refused,
+        };
         match req.path {
             "/" if get => Response {
                 status: Status::Ok,
@@ -262,27 +383,28 @@ impl App {
                 body: PAGE.as_bytes().to_vec(),
                 allow: None,
             },
-            "/api/families" if get => ok(&self.families()),
+            "/api/repos" if get => ok(&self.repos_json()),
+            "/api/families" if get => on(&|r| ok(&r.families())),
             "/api/refresh" if post && !from_us => error(
                 Status::Forbidden,
                 "a refresh is taken only from this server's own page",
             ),
-            "/api/refresh" if post => match self.refresh() {
+            "/api/refresh" if post => on(&|r| match r.refresh() {
                 Ok(v) => ok(&v),
                 Err(e) => error(Status::BadGateway, &e.to_string()),
-            },
-            "/" | "/api/families" => method_not_allowed(READ),
+            }),
+            "/" | "/api/repos" | "/api/families" => method_not_allowed(READ),
             "/api/refresh" => method_not_allowed("POST"),
             path => match path.strip_prefix("/api/tree/") {
                 None => error(Status::NotFound, "no such page"),
                 Some(_) if !get => method_not_allowed(READ),
                 Some(n) => match n.parse() {
                     Err(_) => error(Status::NotFound, "not an item number"),
-                    Ok(n) => match self.tree_of(n) {
+                    Ok(n) => on(&|r| match r.tree_of(n) {
                         Ok(v) => ok(&v),
                         Err(e @ Error::NotFound(_)) => error(Status::NotFound, &e.to_string()),
                         Err(e) => error(Status::BadGateway, &e.to_string()),
-                    },
+                    }),
                 },
             },
         }
@@ -392,6 +514,7 @@ fn answer(stream: TcpStream, app: &App) -> io::Result<()> {
     let res = app.handle(&Request {
         method: h.method,
         path: h.path,
+        query: h.query,
         host: h.host,
         origin: h.origin,
         site: h.site,
@@ -406,9 +529,15 @@ fn parse_head(head: &str) -> Result<Head<'_>, ()> {
         first.next().unwrap_or_default(),
         first.next().unwrap_or_default(),
     );
+    let target = target.split('#').next().unwrap_or_default();
+    let (path, query) = match target.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (target, None),
+    };
     let mut h = Head {
         method,
-        path: target.split(['?', '#']).next().unwrap_or_default(),
+        path,
+        query,
         host: None,
         origin: None,
         site: None,
@@ -486,6 +615,7 @@ mod tests {
         Request {
             method,
             path,
+            query: None,
             host: Some("127.0.0.1:7420"),
             origin: None,
             site: None,
@@ -508,11 +638,11 @@ mod tests {
     #[test]
     fn families_carry_every_family_the_read_time_and_the_badges() {
         let a = app(Arc::new(Mutex::new(items())));
-        a.refresh().unwrap();
+        a.repos[0].refresh().unwrap();
         let r = a.handle(&get("GET", "/api/families"));
         assert_eq!((r.status.code(), r.content_type), (200, "application/json"));
         let v = body(&r);
-        assert_eq!((&v["version"], &v["state"]), (&json!(2), &json!("ready")));
+        assert_eq!((&v["version"], &v["state"]), (&json!(3), &json!("ready")));
         assert_eq!(v["tree"]["version"], 3);
         assert_eq!(numbers(&v), [1, 3]);
         assert_eq!(
@@ -534,7 +664,7 @@ mod tests {
     fn families_are_the_last_read_until_a_refresh_reads_again() {
         let held = Arc::new(Mutex::new(items()));
         let a = app(Arc::clone(&held));
-        a.refresh().unwrap();
+        a.repos[0].refresh().unwrap();
         held.lock()
             .unwrap()
             .push(Item::new(9, State::Open, "new", ""));
@@ -587,7 +717,7 @@ mod tests {
     #[test]
     fn another_host_is_refused_before_anything_is_read() {
         let a = app(Arc::new(Mutex::new(items())));
-        a.refresh().unwrap();
+        a.repos[0].refresh().unwrap();
         for host in [
             None,
             Some("evil.example:7420"),
@@ -611,7 +741,7 @@ mod tests {
     fn a_refresh_from_another_origin_is_refused_and_reads_nothing() {
         let held = Arc::new(Mutex::new(items()));
         let a = app(Arc::clone(&held));
-        a.refresh().unwrap();
+        a.repos[0].refresh().unwrap();
         held.lock()
             .unwrap()
             .push(Item::new(9, State::Open, "new", ""));
@@ -650,6 +780,7 @@ mod tests {
             ("POST", "/", 405),
             ("GET", "/api/refresh", 405),
             ("DELETE", "/api/families", 405),
+            ("POST", "/api/repos", 405),
             ("POST", "/api/tree/1", 405),
             ("GET", "/api/other", 404),
             ("GET", "/index.html", 404),
@@ -705,6 +836,7 @@ mod tests {
             for (method, path) in [
                 ("GET", "/api/tree/1"),
                 ("GET", "/api/families"),
+                ("GET", "/api/repos"),
                 ("POST", "/api/refresh"),
             ] {
                 let r = a.handle(&Request {
@@ -729,7 +861,7 @@ mod tests {
     #[test]
     fn a_405_names_the_allowed_methods_and_head_answers_like_get() {
         let a = app(Arc::new(Mutex::new(items())));
-        a.refresh().unwrap();
+        a.repos[0].refresh().unwrap();
         for (method, path, allow) in [
             ("POST", "/", "GET, HEAD"),
             ("GET", "/api/refresh", "POST"),
@@ -755,10 +887,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (h.method, h.path, h.host, h.origin, h.site, h.length),
+            (
+                h.method, h.path, h.query, h.host, h.origin, h.site, h.length
+            ),
             (
                 "POST",
                 "/api/refresh",
+                Some("x=1"),
                 Some("127.0.0.1:7420"),
                 Some("http://127.0.0.1:7420"),
                 Some("same-origin"),
@@ -769,6 +904,10 @@ mod tests {
             parse_head("GET / HTTP/1.1\r\nHost: evil.example\r\nHost: 127.0.0.1:7420\r\n\r\n")
                 .is_err()
         );
+        let h = parse_head("GET /api/families?repo=app#web HTTP/1.1\r\n\r\n").unwrap();
+        assert_eq!((h.path, h.query), ("/api/families", Some("repo=app")));
+        let h = parse_head("GET /api/families#x?repo=app HTTP/1.1\r\n\r\n").unwrap();
+        assert_eq!((h.path, h.query), ("/api/families", None));
     }
 
     #[derive(Default)]
@@ -919,7 +1058,7 @@ mod tests {
             let app = Arc::clone(&s.app);
             let first = s.held();
             std::thread::spawn(move || {
-                let _ = started.send(app.start(first, move |r| {
+                let _ = started.send(app.start(0, Ok(first), move |r| {
                     tx.send(r.map_err(|e| e.to_string())).unwrap()
                 }));
             });
@@ -937,7 +1076,7 @@ mod tests {
                 &v["error"]
             ),
             (
-                &json!(2),
+                &json!(3),
                 &json!("reading"),
                 &Value::Null,
                 &Value::Null,
@@ -971,7 +1110,7 @@ mod tests {
         let s = Staged::new(true, true);
         let (tx, rx) = std::sync::mpsc::channel();
         s.app
-            .start(s.held(), move |r| {
+            .start(0, Ok(s.held()), move |r| {
                 tx.send(r.map_err(|e| e.to_string())).unwrap()
             })
             .join()
@@ -981,7 +1120,7 @@ mod tests {
         let v = s.families();
         assert_eq!(
             (&v["version"], &v["state"], &v["tree"]),
-            (&json!(2), &json!("failed"), &Value::Null)
+            (&json!(3), &json!("failed"), &Value::Null)
         );
         assert!(
             v["error"].as_str().unwrap().contains("the network is down"),
@@ -1015,7 +1154,7 @@ mod tests {
         let open: Open = Box::new(|| panic!("the first read opened the tracker again"));
         let a = Arc::new(App::new(open, true, RepoConfig::defaults(), 7420));
         let (tx, rx) = std::sync::mpsc::channel();
-        a.start(Box::new(FakeTracker::new(items())), move |r| {
+        a.start(0, Ok(Box::new(FakeTracker::new(items()))), move |r| {
             tx.send(r.map_err(|e| e.to_string())).unwrap()
         })
         .join()
@@ -1063,12 +1202,12 @@ mod tests {
     #[test]
     fn a_refresh_that_fails_keeps_the_last_read_and_families_say_it_failed() {
         let s = Staged::new(true, false);
-        s.app.refresh().unwrap();
+        s.app.repos[0].refresh().unwrap();
         let at = s.families()["read_at"].clone();
         s.fail(true);
         let r = s.app.handle(&get("POST", "/api/refresh"));
         assert_eq!(r.status, Status::BadGateway);
-        assert_eq!(body(&r)["version"], 2);
+        assert_eq!(body(&r)["version"], 3);
         assert!(
             body(&r)["error"]
                 .as_str()
@@ -1087,12 +1226,13 @@ mod tests {
     #[test]
     fn during_a_later_refresh_families_keep_the_last_read_and_say_reading() {
         let s = Staged::new(true, false);
-        s.app.refresh().unwrap();
+        s.app.repos[0].refresh().unwrap();
         s.gate.set(false);
         let later = {
             let app = Arc::clone(&s.app);
             std::thread::spawn(move || {
-                app.refresh()
+                app.repos[0]
+                    .refresh()
                     .map(|v| v["state"].clone())
                     .map_err(|e| e.to_string())
             })
@@ -1111,6 +1251,214 @@ mod tests {
         s.gate.set(true);
         assert_eq!(later.join().unwrap(), Ok(json!("ready")));
         assert_eq!(s.families()["state"], "ready");
+    }
+
+    fn web_items() -> Vec<Item> {
+        let mut root = Item::new(5, State::Open, "web root", "+++\nchildren = [6]\n+++\n");
+        root.links = Some(vec![6]);
+        let mut child = Item::new(6, State::Open, "web child", "+++\nparent = 5\n+++\n");
+        child.links = Some(vec![5]);
+        vec![root, child, Item::new(7, State::Closed, "web done", "")]
+    }
+
+    fn counted(name: &str, made: fn() -> Vec<Item>) -> (Repo, Arc<std::sync::atomic::AtomicU32>) {
+        let opens = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = Arc::clone(&opens);
+        let open: Open = Box::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(FakeTracker::new(made())) as Box<dyn Tracker + Send>)
+        });
+        (
+            Repo::named(name.into(), open, false, RepoConfig::defaults()),
+            opens,
+        )
+    }
+
+    fn two_repos() -> (
+        App,
+        Arc<std::sync::atomic::AtomicU32>,
+        Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        let (app, app_opens) = counted("app", items);
+        let (web, web_opens) = counted("web", web_items);
+        (App::registered(vec![app, web], 7420), app_opens, web_opens)
+    }
+
+    fn asking<'a>(method: &'a str, path: &'a str, query: &'a str) -> Request<'a> {
+        Request {
+            query: Some(query),
+            ..get(method, path)
+        }
+    }
+
+    fn opened(n: &Arc<std::sync::atomic::AtomicU32>) -> u32 {
+        n.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[test]
+    fn registered_repos_are_listed_in_order_and_a_refresh_reads_the_named_one_only() {
+        let (a, app_opens, web_opens) = two_repos();
+        let v = body(&a.handle(&get("GET", "/api/repos")));
+        assert_eq!(
+            v,
+            json!({"version": 3, "repos": [
+                {"name": "app", "state": "reading", "error": null, "read_at": null, "families": null, "open": null},
+                {"name": "web", "state": "reading", "error": null, "read_at": null, "families": null, "open": null},
+            ]})
+        );
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=web"));
+        assert_eq!(r.status, Status::Ok);
+        let v = body(&r);
+        assert_eq!(
+            (&v["version"], &v["repo"], &v["state"]),
+            (&json!(3), &json!("web"), &json!("ready"))
+        );
+        assert_eq!(numbers(&v), [5, 7]);
+        assert_eq!((opened(&app_opens), opened(&web_opens)), (0, 1));
+        let v = body(&a.handle(&get("GET", "/api/repos")));
+        let repos = v["repos"].as_array().unwrap();
+        assert_eq!(
+            (&repos[0]["name"], &repos[0]["state"], &repos[0]["open"]),
+            (&json!("app"), &json!("reading"), &Value::Null)
+        );
+        assert_eq!(
+            (
+                &repos[1]["name"],
+                &repos[1]["state"],
+                &repos[1]["families"],
+                &repos[1]["open"],
+                &repos[1]["error"]
+            ),
+            (
+                &json!("web"),
+                &json!("ready"),
+                &json!(2),
+                &json!(2),
+                &Value::Null
+            )
+        );
+        assert!(repos[1]["read_at"].is_string(), "{v}");
+        a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        let v = body(&a.handle(&get("GET", "/api/repos")));
+        assert_eq!(
+            (&v["repos"][0]["families"], &v["repos"][0]["open"]),
+            (&json!(2), &json!(1))
+        );
+        assert_eq!((opened(&app_opens), opened(&web_opens)), (1, 1));
+    }
+
+    #[test]
+    fn each_endpoint_answers_for_the_repo_it_names() {
+        let (a, _, _) = two_repos();
+        a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        a.handle(&asking("POST", "/api/refresh", "repo=web"));
+        let v = body(&a.handle(&asking("GET", "/api/families", "repo=web")));
+        assert_eq!((&v["repo"], numbers(&v)), (&json!("web"), vec![5, 7]));
+        let v = body(&a.handle(&asking("GET", "/api/families", "x=1&repo=app")));
+        assert_eq!((&v["repo"], numbers(&v)), (&json!("app"), vec![1, 3]));
+        let t = a.handle(&asking("GET", "/api/tree/5", "repo=web"));
+        assert_eq!(t.status, Status::Ok);
+        assert_eq!(body(&t)["roots"][0]["children"][0]["number"], 6);
+        assert_eq!(
+            a.handle(&asking("GET", "/api/tree/1", "repo=web")).status,
+            Status::NotFound
+        );
+        assert_eq!(
+            a.handle(&asking("GET", "/api/tree/1", "repo=app")).status,
+            Status::Ok
+        );
+    }
+
+    #[test]
+    fn a_registered_server_refuses_a_call_naming_no_repo_an_unknown_one_or_two() {
+        let (a, app_opens, web_opens) = two_repos();
+        for (method, path, query, status) in [
+            ("GET", "/api/families", None, Status::BadRequest),
+            ("POST", "/api/refresh", None, Status::BadRequest),
+            ("GET", "/api/tree/1", None, Status::BadRequest),
+            ("GET", "/api/families", Some("repo=nope"), Status::NotFound),
+            ("GET", "/api/families", Some("repo="), Status::NotFound),
+            (
+                "GET",
+                "/api/families",
+                Some("repos=app"),
+                Status::BadRequest,
+            ),
+            ("POST", "/api/refresh", Some("repo=nope"), Status::NotFound),
+            ("GET", "/api/tree/1", Some("repo=nope"), Status::NotFound),
+            (
+                "GET",
+                "/api/families",
+                Some("repo=app&repo=web"),
+                Status::BadRequest,
+            ),
+            (
+                "POST",
+                "/api/refresh",
+                Some("repo=app&repo=app"),
+                Status::BadRequest,
+            ),
+        ] {
+            let r = a.handle(&Request {
+                query,
+                ..get(method, path)
+            });
+            assert_eq!(r.status, status, "{method} {path} {query:?}");
+            assert!(body(&r)["error"].is_string(), "{method} {path} {query:?}");
+        }
+        assert_eq!((opened(&app_opens), opened(&web_opens)), (0, 0));
+    }
+
+    #[test]
+    fn the_clone_it_runs_in_lists_no_repos_and_refuses_a_repo_it_is_asked_for() {
+        let a = app(Arc::new(Mutex::new(items())));
+        assert_eq!(
+            body(&a.handle(&get("GET", "/api/repos"))),
+            json!({"version": 3, "repos": []})
+        );
+        for (method, path) in [
+            ("GET", "/api/families"),
+            ("POST", "/api/refresh"),
+            ("GET", "/api/tree/1"),
+        ] {
+            assert_eq!(
+                a.handle(&asking(method, path, "repo=app")).status,
+                Status::NotFound,
+                "{method} {path}"
+            );
+        }
+        let v = body(&a.handle(&get("POST", "/api/refresh")));
+        assert_eq!((&v["repo"], &v["state"]), (&Value::Null, &json!("ready")));
+    }
+
+    #[test]
+    fn a_repo_whose_tracker_did_not_open_fails_alone() {
+        let (a, _, _) = two_repos();
+        let a = Arc::new(a);
+        a.start(
+            0,
+            Err(Error::unreadable("the clone /gone", "it is not there")),
+            |_| {},
+        )
+        .join()
+        .unwrap();
+        a.start(1, Ok(Box::new(FakeTracker::new(web_items()))), |_| {})
+            .join()
+            .unwrap();
+        let v = body(&a.handle(&get("GET", "/api/repos")));
+        assert_eq!(
+            (&v["repos"][0]["state"], &v["repos"][1]["state"]),
+            (&json!("failed"), &json!("ready"))
+        );
+        assert!(
+            v["repos"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("it is not there"),
+            "{v}"
+        );
+        let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
+        assert_eq!((&f["state"], &f["tree"]), (&json!("failed"), &Value::Null));
     }
 
     #[test]

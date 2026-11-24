@@ -33,13 +33,22 @@ its own first-line words, and the badges `serve` shows.
 
 - **A refusal and an unreadable file are a `config::Error`**, printed `gltree: .gltree.toml: <reason>`
   and exiting 2, the file name coming from its `Display` (#29). It is the config's own type, not a
-  `tracker::Error` variant: reading the config touches no tracker, and its one caller (`main::run`)
-  returns `Box<dyn Error>`, so no conversion is needed (worker's judgement, 2026-11-20).
+  `tracker::Error` variant: reading the config touches no tracker, and its callers in `main`
+  (`run_in_clone`, `serve_clone`) return `Box<dyn Error>`, so no conversion is needed (worker's
+  judgement, 2026-11-20).
+- **A registered repo's config is read from its clone** (#45): `serve` with repos registered reads
+  no config of the folder it runs in, and reads each registered clone's through `registered_config`,
+  which names a failure by the file's path, `<clone>/.gltree.toml: <reason>`, as a clone's own read names `.gltree.toml` (an `Error::Refused` carrying `config::Error`'s reason, which does not tell an unreadable file from a refused one), and fails that repo's tab
+  only, so one broken config does not stop the others (worker's judgement, 2026-11-24, following the
+  issue's rule that a missing clone fails its tab only). `serve add`, `serve list` and `serve remove`
+  read no config at all. `toplevel` is shared with `repos::clone_at`, which takes a clone's top
+  folder as the path it registers.
 
 ## Code
 - `src/config.rs — FILE, SCHEMES, POLICIES, Error, RepoConfig, Badge, RepoConfig::parse, RepoConfig::scheme, RepoConfig::policy, RepoConfig::of_clone, bare_key, toplevel`
 - `src/write.rs — require_opt_in`
-- `src/main.rs — run` (reads the config once, before the command)
+- `src/main.rs — run_in_clone` (reads the config once, before the command), `serve_clone`, `registered_config`
+- `src/repos.rs — clone_at` (calls `toplevel`)
 
 ## Reference behaviour
 **None.**

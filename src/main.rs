@@ -1,12 +1,13 @@
 use clap::{Parser, Subcommand};
 use gltree::check;
-use gltree::config::RepoConfig;
+use gltree::config::{self, RepoConfig};
 use gltree::derived;
 use gltree::gitlab::GitLab;
 use gltree::item::State;
 use gltree::login;
 use gltree::migrate;
 use gltree::remote::Remote;
+use gltree::repos::{self, RepoList};
 use gltree::roots;
 use gltree::serve;
 use gltree::show;
@@ -15,7 +16,7 @@ use gltree::tracker::{Error as TrackerError, Tracker};
 use gltree::tree;
 use gltree::write;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -103,6 +104,8 @@ starts a comment.",
     after_help = "Run `gltree <command> --help` for a command's examples, requirements and output.",
     after_long_help = concat!(
         requires_clone!(),
+        "  `gltree serve` with repos registered by `gltree serve add` runs anywhere.
+",
         "  tree, roots, check, show, migrate and serve take --snapshot FILE, a copy
   saved by `gltree snapshot`, and then need no login or server.
 ",
@@ -126,6 +129,169 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(flatten)]
+    InClone(InClone),
+    #[command(
+        about = "Serve a local page of the tracker's families and trees on 127.0.0.1",
+        args_conflicts_with_subcommands = true,
+        long_about = "Starts a local web server on 127.0.0.1 only, out of reach of other machines,
+prints the page's address at once and serves the page until Ctrl+C. The
+whole tracker is read in the background; until that first read is done, the
+page says it is reading. On the left are the families (a root and everything
+under it), as `gltree tree` picks them, the finished ones behind a toggle,
+each with its progress and badges; on the right is the selected family's
+tree, read fresh, every item linked to its page on the server. The refresh
+button reads the whole tracker again. It writes nothing to the tracker.
+
+With repos registered by `gltree serve add`, it shows every one of them,
+wherever it runs: a tab above the page for each, in the order they were
+registered, with how many items it has open. Every registered repo is read
+at start, all at once, and the refresh button reads the repo shown. With
+none registered, it shows the clone it runs in. --snapshot shows that file
+alone and leaves the list out. The list is ~/.gltree/repos.toml (~ is your
+home folder, %USERPROFILE% on Windows); `serve add`, `serve list` and
+`serve remove` keep it, and no other command reads it.
+
+Badges come from `[[badges]]` in the repo config: each names a label prefix,
+and a root's label that starts with it is shown as a badge.",
+        after_long_help = concat!(
+            "Examples:
+  gltree serve                            # http://127.0.0.1:7420/
+  gltree serve --port 0                   # a free port
+  gltree serve --snapshot tracker.json    # from a file; refresh reads it again
+  gltree serve add ../web                 # show ../web's tracker too
+  gltree serve list                       # the repos it shows
+
+Output:
+  Text: the address, `http://127.0.0.1:PORT/`, before the first read starts.
+  On stderr, a line when the first read starts and one when it ends, with
+  the number of families and the time it took, or with why it failed; with
+  repos registered, one such line for each repo, its name first.
+
+Requirements:
+  With no repo registered, run it inside a clone of the GitLab project. It
+  takes the project from `git remote get-url origin` and logs in with glab's
+  saved login for that host (run `glab auth login` once); GITLAB_TOKEN
+  overrides the token and GLTREE_CA_CERT the CA certificate. With repos
+  registered, it does the same in each registered clone, wherever it runs.
+",
+            reads_a_snapshot!(),
+            reads_the_whole_tracker!(),
+            "  With no repo registered, it first reads the clone's `.gltree.toml` when
+  there is one, and stops when it cannot read it. With repos registered, it
+  reads each registered clone's instead, and one that fails fails that
+  repo's tab only.
+",
+            "
+Exit status:
+  2 when it cannot start (a port in use, a config that fails, git's origin,
+  the glab login or the CA certificate it cannot read, a snapshot file that
+  will not open or is a directory, a repo list it cannot read), with the
+  reason on stderr and no address printed. With repos registered, a clone
+  that is not there or whose origin, login or config fails does not stop it:
+  that repo's tab shows why. A first read that fails does not stop it: the
+  page shows why, and the refresh button reads again. Ctrl+C stops it."
+        )
+    )]
+    Serve {
+        #[command(subcommand)]
+        list: Option<ServeList>,
+        /// The port; 0 takes a free one
+        #[arg(long, default_value_t = serve::DEFAULT_PORT)]
+        port: u16,
+        /// Read the tracker from FILE; refresh reads it again
+        #[arg(
+            long,
+            value_name = "FILE",
+            long_help = "Read the tracker from FILE, a copy saved by `gltree snapshot`, instead
+of the server, leaving the repo list out; the refresh button reads
+the file again"
+        )]
+        snapshot: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServeList {
+    #[command(
+        about = "Register a clone whose tracker gltree serve shows",
+        long_about = "Adds the clone at PATH to the list gltree serve shows, ~/.gltree/repos.toml,
+under NAME: the last part of the GitLab project's path, unless --name gives
+another. Its tab shows the project the clone's `origin` names, with the
+clone's `.gltree.toml`, both read each time serve starts. Every other
+command keeps reading the clone it runs in.",
+        after_long_help = concat!(
+            "Examples:
+  gltree serve add .                      # the clone you are in
+  gltree serve add ../web --name site     # another clone, under another name
+
+Output:
+  Text: `registered NAME: PATH`, PATH being the clone's top folder.
+
+Requirements:
+  PATH is inside a git clone whose `origin` names a GitLab project
+  (`git remote get-url origin`); a `.gltree.toml` is not required. It needs
+  no login or server: glab's saved login is read when serve starts.
+",
+            "
+Exit status:
+  0 on success; 2 when PATH is not a git clone, its origin names no GitLab
+  project, NAME is taken or is not 1 to 64 letters, digits, `.`, `_` or
+  `-`, or the list cannot be read or written, with the reason on stderr."
+        )
+    )]
+    Add {
+        /// The clone to register
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// The name its tab shows; the project's name by default
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+    },
+    #[command(
+        about = "List the repos gltree serve shows",
+        long_about = "Prints the repos registered in ~/.gltree/repos.toml, in the order they were
+registered, which is the order of serve's tabs.",
+        after_long_help = "Examples:
+  gltree serve list
+
+Output:
+  Text: one line per repo, `NAME  PATH`; nothing when none is registered.
+
+Requirements:
+  None: it reads ~/.gltree/repos.toml only, and runs anywhere.
+
+Exit status:
+  0 on success; 2 when the list cannot be read, with the reason on stderr."
+    )]
+    List,
+    #[command(
+        about = "Take a repo off the list gltree serve shows",
+        long_about = "Removes NAME from ~/.gltree/repos.toml. The clone and its tracker are left
+as they are.",
+        after_long_help = "Examples:
+  gltree serve remove web
+  gltree serve remove site                # the name given with --name
+
+Output:
+  Text: `removed NAME: PATH`.
+
+Requirements:
+  None: it changes ~/.gltree/repos.toml only, and runs anywhere.
+
+Exit status:
+  0 on success; 2 when no repo is registered as NAME, or the list cannot be
+  read or written, with the reason on stderr."
+    )]
+    Remove {
+        /// The registered repo to remove
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum InClone {
     #[command(
         about = "Draw the tree under an item, or every family with open work",
         long_about = "Draws an item and everything under it as an indented tree. Each line shows
@@ -721,57 +887,6 @@ Output:
         #[arg(value_name = "FILE")]
         out: PathBuf,
     },
-    #[command(
-        about = "Serve a local page of the tracker's families and trees on 127.0.0.1",
-        long_about = "Starts a local web server on 127.0.0.1 only, out of reach of other machines,
-prints the page's address at once and serves the page until Ctrl+C. The
-whole tracker is read in the background; until that first read is done, the
-page says it is reading. On the left are the families (a root and everything
-under it), as `gltree tree` picks them, the finished ones behind a toggle,
-each with its progress and badges; on the right is the selected family's
-tree, read fresh, every item linked to its page on the server. The refresh
-button reads the whole tracker again. It writes nothing to the tracker.
-
-Badges come from `[[badges]]` in the repo config: each names a label prefix,
-and a root's label that starts with it is shown as a badge.",
-        after_long_help = concat!(
-            "Examples:
-  gltree serve                            # http://127.0.0.1:7420/
-  gltree serve --port 0                   # a free port
-  gltree serve --snapshot tracker.json    # from a file; refresh reads it again
-
-Output:
-  Text: the address, `http://127.0.0.1:PORT/`, before the first read starts.
-  On stderr, a line when the first read starts and one when it ends, with
-  the number of families and the time it took, or with why it failed.
-
-",
-            requires_clone!(),
-            reads_a_snapshot!(),
-            reads_the_whole_tracker!(),
-            reads_the_config!(),
-            "
-Exit status:
-  2 when it cannot start (a port in use, a config that fails, git's origin,
-  the glab login or the CA certificate it cannot read, a snapshot file that
-  will not open or is a directory), with the reason on stderr and no address
-  printed. A first read that fails does not stop it: the page shows why, and
-  the refresh button reads again. Ctrl+C stops it."
-        )
-    )]
-    Serve {
-        /// The port; 0 takes a free one
-        #[arg(long, default_value_t = serve::DEFAULT_PORT)]
-        port: u16,
-        /// Read the tracker from FILE; refresh reads it again
-        #[arg(
-            long,
-            value_name = "FILE",
-            long_help = "Read the tracker from FILE, a copy saved by `gltree snapshot`, instead
-of the server; the refresh button reads the file again"
-        )]
-        snapshot: Option<PathBuf>,
-    },
 }
 
 /// `key=value` for `--set-extra`.
@@ -798,8 +913,11 @@ fn current_dir() -> Result<PathBuf, TrackerError> {
 
 /// The tracker of the clone gltree runs in, through the user's glab login.
 fn server() -> Result<GitLab, TrackerError> {
-    let dir = current_dir()?;
-    let remote = Remote::of_clone(&dir)?;
+    server_in(&current_dir()?)
+}
+
+fn server_in(dir: &Path) -> Result<GitLab, TrackerError> {
+    let remote = Remote::of_clone(dir)?;
     let env = |k: &str| std::env::var(k).ok();
     let yaml = login::read_glab_config(&login::glab_config_paths(&env, std::env::home_dir()))?;
     let login = login::login(yaml.as_deref(), &remote.host, &env)?;
@@ -814,6 +932,141 @@ fn source(snapshot: Option<PathBuf>) -> Result<Box<dyn Tracker + Send>, TrackerE
     })
 }
 
+fn repo_list() -> Result<RepoList, TrackerError> {
+    let home = std::env::home_dir()
+        .ok_or_else(|| TrackerError::unreadable("the home folder", "the system names none"))?;
+    RepoList::load(RepoList::file_in(&home))
+}
+
+fn registered_config(path: &Path) -> Result<RepoConfig, TrackerError> {
+    if !path.is_dir() {
+        return Err(TrackerError::unreadable(
+            format!("the clone {}", path.display()),
+            "it is not there",
+        ));
+    }
+    RepoConfig::of_clone(path).map_err(|e| {
+        TrackerError::Refused(format!("{}: {}", path.join(config::FILE).display(), e.0))
+    })
+}
+
+fn registered_tracker(path: &Path) -> Result<Box<dyn Tracker + Send>, TrackerError> {
+    registered_config(path)?;
+    Ok(Box::new(server_in(path)?))
+}
+
+fn serve_command(
+    list: Option<ServeList>,
+    port: u16,
+    snapshot: Option<PathBuf>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let mut out = std::io::stdout().lock();
+    match list {
+        Some(ServeList::Add { path, name }) => {
+            let mut list = repo_list()?;
+            let (top, remote) = repos::clone_at(&path)?;
+            let name = name.unwrap_or_else(|| repos::default_name(&remote).to_string());
+            list.add(&name, top.clone())?;
+            list.save()?;
+            writeln!(out, "registered {name}: {}", top.display())?;
+        }
+        Some(ServeList::List) => {
+            for repo in repo_list()?.repos {
+                writeln!(out, "{}  {}", repo.name, repo.path.display())?;
+            }
+        }
+        Some(ServeList::Remove { name }) => {
+            let mut list = repo_list()?;
+            let gone = list.remove(&name)?;
+            list.save()?;
+            writeln!(out, "removed {}: {}", gone.name, gone.path.display())?;
+        }
+        None => {
+            let registered = match snapshot {
+                Some(_) => vec![],
+                None => repo_list()?.repos,
+            };
+            if registered.is_empty() {
+                serve_clone(port, snapshot)?;
+            } else {
+                serve_registered(port, registered)?;
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn listen(port: u16) -> Result<(std::net::TcpListener, u16), Box<dyn std::error::Error>> {
+    let listener = serve::bind(port).map_err(|e| format!("127.0.0.1:{port}: {e}"))?;
+    let port = listener.local_addr()?.port();
+    Ok((listener, port))
+}
+
+fn print_address(port: u16) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "http://127.0.0.1:{port}/")?;
+    out.flush()
+}
+
+fn serve_clone(port: u16, snapshot: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let config = RepoConfig::of_clone(&current_dir()?)?;
+    let (listener, port) = listen(port)?;
+    let walk = snapshot.is_none();
+    let first = source(snapshot.clone())?;
+    let open: serve::Open = Box::new(move || source(snapshot.clone()));
+    let app = Arc::new(serve::App::new(open, walk, config, port));
+    print_address(port)?;
+    eprintln!("gltree: reading the whole tracker");
+    let began = std::time::Instant::now();
+    app.start(0, Ok(first), move |read| match read {
+        Ok(n) => eprintln!(
+            "gltree: read {n} families in {:.1} s",
+            began.elapsed().as_secs_f64()
+        ),
+        Err(e) => eprintln!("gltree: the first read failed: {e}"),
+    });
+    serve::serve(listener, app)?;
+    Ok(())
+}
+
+fn serve_registered(
+    port: u16,
+    registered: Vec<repos::Repo>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (listener, port) = listen(port)?;
+    let mut shown = Vec::with_capacity(registered.len());
+    let mut firsts = Vec::with_capacity(registered.len());
+    for repo in registered {
+        let (config, first) = match registered_config(&repo.path) {
+            Ok(config) => {
+                let first =
+                    server_in(&repo.path).map(|server| Box::new(server) as Box<dyn Tracker + Send>);
+                (config, first)
+            }
+            Err(e) => (RepoConfig::defaults(), Err(e)),
+        };
+        let path = repo.path.clone();
+        let open: serve::Open = Box::new(move || registered_tracker(&path));
+        shown.push(serve::Repo::named(repo.name.clone(), open, true, config));
+        firsts.push((repo.name, first));
+    }
+    let app = Arc::new(serve::App::registered(shown, port));
+    print_address(port)?;
+    eprintln!("gltree: reading {} registered repos", firsts.len());
+    let began = std::time::Instant::now();
+    for (i, (name, first)) in firsts.into_iter().enumerate() {
+        app.start(i, first, move |read| match read {
+            Ok(n) => eprintln!(
+                "gltree: {name}: read {n} families in {:.1} s",
+                began.elapsed().as_secs_f64()
+            ),
+            Err(e) => eprintln!("gltree: {name}: the first read failed: {e}"),
+        });
+    }
+    serve::serve(listener, app)?;
+    Ok(())
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(code) => code,
@@ -825,6 +1078,17 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    match cli.command {
+        Command::Serve {
+            list,
+            port,
+            snapshot,
+        } => serve_command(list, port, snapshot),
+        Command::InClone(command) => run_in_clone(command),
+    }
+}
+
+fn run_in_clone(command: InClone) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let config = RepoConfig::of_clone(&current_dir()?)?;
     let scheme = config.scheme();
     let policy = config.policy();
@@ -834,8 +1098,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         extra_keys: &config.extra_keys,
     };
     let mut out = std::io::stdout().lock();
-    match cli.command {
-        Command::Tree {
+    match command {
+        InClone::Tree {
             root,
             all,
             snapshot,
@@ -867,7 +1131,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Check { snapshot, json } => {
+        InClone::Check { snapshot, json } => {
             let items = source(snapshot)?.all_items()?;
             let found = check::check_with(
                 &items,
@@ -893,7 +1157,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 ExitCode::from(1)
             })
         }
-        Command::New {
+        InClone::New {
             parent,
             from,
             related,
@@ -935,7 +1199,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Edit {
+        InClone::Edit {
             item,
             add_related,
             remove_related,
@@ -980,7 +1244,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Move {
+        InClone::Move {
             item,
             to,
             to_root: _,
@@ -1011,7 +1275,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Roots {
+        InClone::Roots {
             open,
             closed,
             labels,
@@ -1049,7 +1313,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Migrate {
+        InClone::Migrate {
             from_word,
             related_word,
             snapshot,
@@ -1087,7 +1351,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Sync {
+        InClone::Sync {
             item,
             dry_run,
             json,
@@ -1113,7 +1377,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Show {
+        InClone::Show {
             item,
             snapshot,
             json,
@@ -1132,28 +1396,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Serve { port, snapshot } => {
-            let listener = serve::bind(port).map_err(|e| format!("127.0.0.1:{port}: {e}"))?;
-            let port = listener.local_addr()?.port();
-            let walk = snapshot.is_none();
-            let first = source(snapshot.clone())?;
-            let open: serve::Open = Box::new(move || source(snapshot.clone()));
-            let app = Arc::new(serve::App::new(open, walk, config, port));
-            writeln!(out, "http://127.0.0.1:{port}/")?;
-            out.flush()?;
-            eprintln!("gltree: reading the whole tracker");
-            let began = std::time::Instant::now();
-            app.start(first, move |read| match read {
-                Ok(n) => eprintln!(
-                    "gltree: read {n} families in {:.1} s",
-                    began.elapsed().as_secs_f64()
-                ),
-                Err(e) => eprintln!("gltree: the first read failed: {e}"),
-            });
-            serve::serve(listener, app)?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Command::Snapshot { out: path } => {
+        InClone::Snapshot { out: path } => {
             let items = server()?.items_with_comments()?;
             SnapshotFile::save(&path, &items).map_err(|e| format!("{}: {e}", path.display()))?;
             writeln!(out, "{} items -> {}", items.len(), path.display())?;
@@ -1213,9 +1456,17 @@ mod tests {
         commands.extend(
             top.get_subcommands()
                 .filter(|c| c.get_name() != "help")
+                .flat_map(|c| std::iter::once(c).chain(c.get_subcommands()))
+                .filter(|c| c.get_name() != "help")
                 .cloned(),
         );
         assert!(commands.len() > 10);
+        for nested in ["add", "list", "remove"] {
+            assert!(
+                commands.iter().any(|c| c.get_name() == nested),
+                "serve {nested} is not checked"
+            );
+        }
         for cmd in &commands {
             let name = cmd.get_name();
             assert!(cmd.get_about().is_some(), "{name}: no about");
@@ -1231,7 +1482,13 @@ mod tests {
                 assert!(long.contains("Output:"), "{name}: no Output:");
             }
             let lines = examples(cmd);
-            assert!(lines.len() >= 2, "{name}: fewer than two examples");
+            let takes_any = cmd
+                .get_arguments()
+                .any(|a| !matches!(a.get_id().as_str(), "help" | "version"));
+            assert!(
+                lines.len() >= if takes_any { 2 } else { 1 },
+                "{name}: too few examples"
+            );
             for line in lines {
                 let words = words(&line);
                 assert_eq!(words[0], "gltree", "{name}: {line}");
@@ -1257,7 +1514,11 @@ mod tests {
         let mut top = Cli::command();
         top.build();
         let mut commands = vec![top.clone()];
-        commands.extend(top.get_subcommands().cloned());
+        commands.extend(
+            top.get_subcommands()
+                .flat_map(|c| std::iter::once(c).chain(c.get_subcommands()))
+                .cloned(),
+        );
         for mut cmd in commands {
             let name = cmd.get_name().to_string();
             for text in [cmd.render_help(), cmd.render_long_help()] {
@@ -1282,6 +1543,38 @@ mod tests {
             .to_string();
         assert!(err.contains("gltree new"), "{err}");
         assert!(!err.contains("gltree.exe"), "{err}");
+    }
+
+    #[test]
+    fn a_registered_config_that_fails_is_named_by_its_path_with_no_verb_of_ours() {
+        let dir =
+            std::env::temp_dir().join(format!("gltree-{}-registered-config", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let file = dir.join(".gltree.toml");
+        let named = format!("{}: ", file.display());
+        std::fs::create_dir_all(&file).unwrap();
+        let unread = super::registered_config(&dir).unwrap_err().to_string();
+        std::fs::remove_dir_all(&file).unwrap();
+        std::fs::write(&file, "state_policy = \"nope\"\n").unwrap();
+        let refused = super::registered_config(&dir).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        for m in [&unread, &refused] {
+            assert!(m.starts_with(&named), "{m}");
+            assert!(
+                !m.contains("malformed") && !m.contains("cannot read"),
+                "{m}"
+            );
+        }
+        assert!(refused.contains("unknown state_policy"), "{refused}");
     }
 
     #[test]

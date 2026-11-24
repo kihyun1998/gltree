@@ -3,7 +3,9 @@
 ## What it is
 `gltree serve`: a local web server on 127.0.0.1 that serves one page embedded in the binary and a
 small JSON API over the tracker — the families on the left, the selected family's tree on the right,
-every node linked to the server, a refresh button, and the badges a repo names in its config.
+every node linked to the server, a refresh button, and the badges a repo names in its config. It
+shows the tracker of the clone it runs in, or, once repos are registered in `~/.gltree/repos.toml`,
+every registered repo behind a row of tabs.
 
 ## Governing decisions
 **None.** The shape rests on issue #27, confirmed with the maintainer (2026-11-19), and on the
@@ -11,8 +13,39 @@ reasons below.
 
 ## Design model
 - **Read only.** The server calls only the tracker port's reads: `all_items` through `tree::tree`,
-  and `level` through `tree::live_tree` (`App::read_all`, `App::tree_of`). Nothing on the page
+  and `level` through `tree::live_tree` (`Repo::read_all`, `Repo::tree_of`). Nothing on the page
   writes (issue #27, out of scope).
+- **The repo list** (issue #45, maintainer, 2026-11-24). `~/.gltree/repos.toml` holds `[[repo]]`
+  entries, each a `name` and the absolute `path` of a clone, in the order they were registered
+  (`repos::RepoList`); the home folder is `std::env::home_dir`, which reads `USERPROFILE` first on
+  Windows and `HOME` on Unix (std 1.96, `library/std/src/sys/paths/windows.rs`), as the glab config
+  lookup already does. Only `serve` reads it; every other command keeps taking its tracker from the
+  clone it runs in, so the skills and scripts that call gltree inside clones are unchanged. `serve add
+  PATH [--name N]`, `serve list` and `serve remove N` keep it (`main::serve_command`): `add` stores
+  the clone's top folder (`repos::clone_at`, through `config::toplevel`), named by the last part of
+  its project path (`repos::default_name`), and refuses a path outside a git clone, an `origin` naming
+  no GitLab project and a name taken; it needs no `.gltree.toml`, since `serve` runs without one. A
+  name is 1 to 64 ASCII letters, digits, `.`, `_` or `-` (`repos::name_error`; worker's judgement,
+  2026-11-24): the characters a GitLab project path's last part takes, which `encodeURIComponent`
+  leaves as they are, so `?repo=` and the address after `#` carry a name unchanged and the server
+  compares the query's value as sent, with no decoding. The file is read whole and refused as
+  malformed when it breaks a rule `add` holds (a taken or bad name, a relative path) or names a key
+  it does not take; it is written through `snapshot::replace_file`, so a failed write leaves the old
+  list. `serve add`, `serve list` and `serve remove` read no repo config, so they run anywhere.
+- **What `serve` shows** (#45). With no `--snapshot` and at least one repo registered, every
+  registered repo, wherever it runs (`main::serve_registered`); with none, the clone it runs in, as
+  before (`main::serve_clone`); with `--snapshot`, that file alone, the list not even read, so a
+  broken list does not stop it. A list that cannot be read stops `serve` with exit 2 before the
+  address. Each registered repo is a `serve::Repo`: its name, its `Open` over `main::registered_tracker`,
+  its repo config read from its clone at start (`registered_config`) and its kept read. Before the
+  address, each clone's config, `origin` and glab login are read with no network (`server_in`, the
+  same as `server` with the clone's folder); a failure there (a clone that is gone, a config refused,
+  an `origin` or login that fails) becomes that repo's first read, so its tab fails with the reason and
+  the others run. A config refused at start leaves that repo on the default config: a refresh after
+  the fix reads the tracker but shows no badges until `serve` starts again (see Known holes). Every
+  repo's first full read starts at once, each on its own thread (`App::start` with the repo's index),
+  since one read of a real tracker takes about 30–45 s (maintainer, 2026-11-24); stderr says when they
+  start and, per repo with its name first, when each ends. A refresh reads the repo it names only.
 - **Two reads.** The full read (`tree::tree` with no root, every family, finished ones included)
   starts once the address is printed, on a thread of its own (`App::start`), and again on
   `POST /api/refresh`; its answer is kept and `GET /api/families` serves the kept one. `GET /api/tree/N` reads N's tree fresh: against
@@ -20,7 +53,8 @@ reasons below.
   full read of a tracker of a few thousand items took about 45 s (maintainer, measured, 2026-11-19),
   so the page shows the kept read at once and swaps in the walked tree when it arrives.
 - **The tracker is opened per read** through `serve::Open`, a closure `main` builds over `source`,
-  the same opener every other command uses: a `SnapshotFile` for `--snapshot`, otherwise `server()`,
+  the same opener every other command uses (for a registered repo, over `registered_tracker`, which
+  checks the clone is there and reads its config before `server_in`): a `SnapshotFile` for `--snapshot`, otherwise `server()`,
   with a failure to open kept as the tracker's own error — so a refresh after a new login picks it up,
   and `App` holds no tracker across threads. The token lives inside `GitLab` and no response carries
   anything but tree JSON and error messages (`App::handle`).
@@ -31,7 +65,7 @@ reasons below.
   discarded; every answer closes the connection (`answer`, `parse_head`, `write`). HEAD answers as
   GET without the body, and a 405 names its `Allow` (RFC 9110). A failed accept waits 100 ms before the
   next, so a lasting error (no file handles left) does not spin a core. A judgement over a small server
-  crate (reading, 2026-11-19): the four routes need no more.
+  crate (reading, 2026-11-19): the five routes need no more.
 - **The address comes first, the first read after it** (issue #35, confirmed with the maintainer,
   2026-11-23; it reverses #27's "the first full read happens at start, before the address is printed",
   maintainer, 2026-11-20). On a tracker of 2,803 items on a self-hosted CE the old order showed nothing
@@ -44,15 +78,15 @@ reasons below.
   own through `Open`. The terminal says on stderr when the first
   read starts and when it ends, with the number of families and the time, or why it failed; stdout
   carries the address only, since callers read its first line.
-- **One read at a time; a refresh during one starts nothing** (issue #35). `App::begin` marks a read
+- **One read at a time; a refresh during one starts nothing** (issue #35), per repo. `Repo::begin` marks a read
   as running, and `App::start` marks it before returning, so a refresh that arrives before the
   thread runs cannot start a second one. `POST /api/refresh` while a read runs answers the
   `/api/families` shape at once with `state` `reading`; otherwise it reads on the request's thread
   and answers when the read ends (worker's judgement, 2026-11-23: the brief changed only the refresh
-  that meets a running read). A read that panics is caught (`App::finish`) and kept as a failed read
+  that meets a running read). A read that panics is caught (`Repo::finish`) and kept as a failed read
   naming the panic, so `reading` is always released and the next refresh reads again.
   `read_at` is when the kept read finished.
-- **`state`** (`App::families_of`, worker's judgement, 2026-11-23, derived from what the page must
+- **`state`** (`Repo::state`, worker's judgement, 2026-11-23, derived from what the page must
   show): `reading` while any read runs, the first or a refresh; `failed` when the last read failed,
   with `error` its message; `ready` when it succeeded. `tree` and `read_at` are the last read that
   succeeded, `null` until one has, and stay through a later refresh and a failed one: a page opened
@@ -67,8 +101,18 @@ reasons below.
   `Sec-Fetch-Site`. A request with neither header (curl, a script on the machine) is served
   (`App::ours`, `App::handle`). Every answer sets `no-store`, `nosniff`,
   `no-referrer` and a CSP allowing only the page's inline script and style and `connect-src 'self'`.
-- **JSON**: `/api/families` and errors carry `serve::JSON_VERSION` 2 — `{version, state, error, read_at, badges, tree}`
-  and `{version, error}`; `tree` and `/api/tree/N` are
+  `/api/repos` is under `/api/`, so the same checks hold for it, and a repo name is never a path:
+  the server looks it up among the registered names and opens only the clone path the list holds.
+- **JSON**: `/api/repos`, `/api/families` and errors carry `serve::JSON_VERSION` 3 (2 before #45) —
+  `{version, repos: [{name, state, error, read_at, families, open}]}`, `{version, repo, state, error,
+  read_at, badges, tree}` and `{version, error}`; `repos` is the registered repos in the order they
+  were registered, empty with none registered or with `--snapshot`, and `families` and `open` count
+  the kept read's families and open items, counted once when the read ends (`open_items`), `null`
+  until one has; `repo` is the repo's name, `null` for the clone it runs in. With repos registered,
+  `/api/families`, `/api/refresh` and `/api/tree/N` name one with `?repo=NAME` (`App::repo`): none or
+  `repo` given twice is 400, a name not registered 404; with none registered, a `repo` is 404, so a
+  caller asking for a repo never gets the clone's tracker in its place. The query is kept apart from
+  the path by `parse_head` and read as `&`-separated pairs, no percent-decoding; `tree` and `/api/tree/N` are
   `tree::to_json` at its own version ([drawing-a-tree](drawing-a-tree.md)). `read_at` is UTC,
   written by `utc` with no date crate. Status: 404 for an unknown path or number, 405 for a known path
   with another method, 400 / 413 for a head or body it will not read, 403 as above, 502 for a read
@@ -115,6 +159,26 @@ reasons below.
   in a browser that focuses a clicked button, as Chromium does (#41's lens review, CDP mouse input:
   focus moved, `:focus-visible` false, so no ring shows). The move is the redraw's focus rule below:
   the fold row has no counterpart, and the first revealed row stands where it stood (#37).
+- **Repo tabs** (#45: the maintainer picked variant A of three, run on a real tracker of about 630
+  families plus two synthetic repos, 2026-11-24). With repos registered, a row of tabs above the hero
+  (`#tabs`, a `nav` of buttons) names each repo in the order `/api/repos` gives, with its open items
+  (`N left`) once it has a kept read, a dot in `--accent` while it is read and one in `--warn` when its
+  read failed, its `title` naming why. The chosen tab has `aria-current="page"` and shows today's page
+  for that repo unchanged: every API call carries `?repo=` (`q`). With none registered (`repos`
+  empty) the row stays hidden and no call carries `repo`. The page asks `/api/repos` first (`boot`),
+  again every 1.5 s while any repo is read (`tabs`, one timer), and again when the shown repo's read
+  ends (`take`), or a refresh of it fails with an error status (`ask`), so its tab shows the failure; the buttons are made once and updated in place (`tab`), compared by name as strings
+  and never put into a selector, so a tab with focus keeps it through an update. The chosen tab is
+  the address after `#`, the name through `encodeURIComponent`: a click sets `location.hash` and the
+  `hashchange` that follows switches (`show`), so the back button goes to the tab before and a reload
+  or reopened page shows the same repo; a hash naming no registered repo changes nothing, and with no
+  hash the first repo is chosen and written with `history.replaceState`. A switch resets the page to
+  that repo's first paint (no data, no selection, no kept walks or folds, "Reading…", the button idle)
+  and loads its families (worker's judgement, 2026-11-24: the issue keeps the chosen repo, not the
+  family chosen in each). `gen` counts switches: an `/api/families` or `/api/refresh` answer, a
+  failure included, that arrives after a switch is dropped, and so is the next `load` a `reading`
+  answer scheduled, so an old repo's refresh never paints over the new one; a walk is dropped by `want`
+  as before, which a switch also raises. The tabs add no motion: the dots do not pulse.
 - **No filter bar** (#41, taking over #40). The page once had a filter per badge value and per
   badge's `missing`; the maintainer does not use them (2026-11-23), and with no `[[badges]]` the bar
   held one "All" button that changed nothing. The buttons, their state and the dimming of
@@ -254,13 +318,14 @@ reasons below.
   keeps [listing-roots](listing-roots.md)' boundary: label meanings are the caller's.
 
 ## Code
-- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, App, Kept, App::new, App::start, App::refresh, App::begin, App::finish, App::read_all, App::families_of, App::tree_of, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, Repo, Repo::named, App, Kept, Done, App::new, App::registered, App::start, App::repos_json, App::repo, Repo::refresh, Repo::begin, Repo::finish, Repo::read_all, Repo::families, Repo::summary, Repo::tree_of, open_items, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/repos.rs — Repo, RepoList, RepoList::file_in, RepoList::load, RepoList::add, RepoList::remove, RepoList::save, name_error, clone_at, default_name`
 - `src/snapshot.rs — SnapshotFile::open` (the check before the address, a directory refused)
 - `src/config.rs — Badge` (serialised as it is into `/api/families`' `badges`)
 - `src/tracker.rs — FakeTracker::fail_all_items` (the unit test that a walk reads no full tracker)
 - `src/serve.html`
-- `src/main.rs — Command::Serve, source, server`
-- `tests/cli.rs — serve_in, read_families, serve_that_stops, the serve_* tests`; `serve_prints_its_address_while_the_first_read_still_waits_on_the_server` holds the first read behind a local listener that never answers, since a snapshot's read ends too fast to show the order
+- `src/main.rs — Command::Serve, ServeList, serve_command, repo_list, registered_config, registered_tracker, serve_clone, serve_registered, listen, print_address, source, server, server_in`
+- `tests/cli.rs — serve_in, read_families, serve_that_stops, the serve_* tests, at_home, in_home, stand_in, read_repos`; `gltree` and `gltree_cmd` give every command they start a temporary home (`HOME` and `USERPROFILE`), and every test that runs `serve` or a `serve` subcommand starts it through them; the few tests that start the binary by hand run `tree`, `check`, `new`, `move` and `sync`, which never read `~/.gltree`; `serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one_named` serves three registered clones, two backed by local stand-ins that answer every GraphQL request with one page of work items and count the requests, and one whose folder is deleted; `serve_prints_its_address_while_the_first_read_still_waits_on_the_server` holds the first read behind a local listener that never answers, since a snapshot's read ends too fast to show the order
 
 ## Reference behaviour
 **None.**
@@ -277,6 +342,20 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
+- A registered repo whose `.gltree.toml` is refused at start is served on the default config: a
+  refresh after the file is fixed reads the tracker, with no badges until `serve` starts again, since
+  `Repo` keeps the config it was given (#45, worker's judgement, 2026-11-24).
+- #45's page was checked in headless Edge over CDP at 1440×900 against the real binary, three
+  registered clones and two local stand-in GraphQL servers, one holding its first answer 3 s
+  (2026-11-24): the tabs in order with `app` chosen and written after `#`; the reading dot, then
+  `2 left` and `1 left`; the failed dot with its reason and the failed repo's banner; a real mouse
+  click switching tabs and the address; a reload and the back button keeping the tab; an unknown name
+  after `#` changing nothing; a refresh reading the shown repo only; focus on a tab kept through a
+  refresh's tab update; an `app` refresh that answers after a switch to `site` leaving `site` as it
+  is; the tabs above the hero and the page not scrolling; and no tabs and no hash with `--snapshot`.
+  Three mutations were each seen failing their check: no `gen` guard in `ask`, no `replaceState`, and
+  the tab row rebuilt on every update. The stand-in answered a walk with the page shape, so a walked
+  tree drew the stale note; the walk itself is #30's, unchanged here.
 - Two `/api/families` chains can run at once: a refresh clicked before the page's first `/api/families` answers is accepted, and when the server is still reading both answers are `reading` and each schedules its own `load`. The second `ready` turns "Up to date" back to "Refresh" and paints again, which reads the selected family's tree once more. Shown in a harness that holds answers (#30's review, 2026-11-23); the window is the first request's round trip, a few ms on localhost. Present since the page landed; closing it (the first `load` marking the button busy) was left open by the maintainer (2026-11-23).
 - That `App::start` marks the read before its thread runs is not tested: the race it closes needs
   the thread scheduled late, which a test cannot arrange without a seam (2026-11-23).

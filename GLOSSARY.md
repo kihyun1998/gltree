@@ -83,3 +83,7 @@ _Avoid_: marker (a consumer's own word for theirs), tag
 
 **Repo config**:
 The file a consuming repo commits to say it uses gltree and which root label, relation scheme, state policy, extra keys and badges it takes.
+
+**Repo list**:
+The repos `gltree serve` shows, each a name and the path of a clone, kept in `~/.gltree/repos.toml` by `serve add`, `serve list` and `serve remove`. Only `serve` reads it; every other command takes its tracker from the clone it runs in.
+_Avoid_: registry, workspace

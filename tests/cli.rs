@@ -4,9 +4,12 @@ use std::process::{Command, Output};
 const FIXTURE: &str = "tests/fixtures/tracker.json";
 
 fn gltree(args: &[&str]) -> Output {
+    let home = std::env::temp_dir().join("gltree-no-home");
     Command::new(env!("CARGO_BIN_EXE_gltree"))
         .args(args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .output()
         .unwrap()
 }
@@ -661,7 +664,12 @@ fn gltree_cmd(dir: &Path, args: &[&str]) -> Command {
     cmd.args(args)
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap());
+    at_home(&mut cmd, &dir.join(".home"));
     cmd
+}
+
+fn at_home<'a>(cmd: &'a mut Command, home: &Path) -> &'a mut Command {
+    cmd.env("HOME", home).env("USERPROFILE", home)
 }
 
 fn gltree_in(dir: &Path, args: &[&str]) -> Output {
@@ -975,7 +983,7 @@ fn read_families(base: &str) -> serde_json::Value {
     let start = std::time::Instant::now();
     loop {
         let (status, v) = json_of("GET", &format!("{base}/api/families"));
-        assert_eq!((status, &v["version"]), (200, &serde_json::json!(2)), "{v}");
+        assert_eq!((status, &v["version"]), (200, &serde_json::json!(3)), "{v}");
         if v["state"] != "reading" {
             return v;
         }
@@ -1043,6 +1051,10 @@ fn serve_answers_the_page_every_family_with_the_badges_and_one_tree() {
     let (status, e) = json_of("GET", &format!("{}/api/tree/42", s.base));
     assert_eq!(status, 404);
     assert!(e["error"].as_str().unwrap().contains("#42"), "{e}");
+    assert_eq!(
+        json_of("GET", &format!("{}/api/repos", s.base)),
+        (200, serde_json::json!({"version": 3, "repos": []}))
+    );
 }
 
 #[test]
@@ -1190,7 +1202,7 @@ fn serve_prints_its_address_while_the_first_read_still_waits_on_the_server() {
         (status, &v["version"], &v["state"], &v["tree"]),
         (
             200,
-            &serde_json::json!(2),
+            &serde_json::json!(3),
             &serde_json::json!("reading"),
             &serde_json::Value::Null
         ),
@@ -1253,4 +1265,411 @@ fn top_level_help_says_where_it_runs_and_where_to_read_more() {
         assert!(long.contains(needle), "{needle}\n{long}");
     }
     assert!(help_text(&["-h"]).len() < long.len());
+}
+
+fn toplevel(dir: &Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+fn clone_of(name: &str, origin: &str) -> std::path::PathBuf {
+    let dir = clone_without_config(name);
+    assert!(
+        Command::new("git")
+            .args(["remote", "add", "origin", origin])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    dir
+}
+
+fn in_home(home: &Path, args: &[&str]) -> Output {
+    let mut cmd = gltree_cmd(home, args);
+    at_home(&mut cmd, home).output().unwrap()
+}
+
+fn text_of(out: &Output) -> (Option<i32>, String, String) {
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn serve_add_list_and_remove_keep_the_list_in_the_home_folder() {
+    let home = outside_a_clone("serve-list-home");
+    let app = clone_of(
+        "serve-list-app",
+        "https://gitlab.example.invalid/team/app.git",
+    );
+    let web = clone_of(
+        "serve-list-web",
+        "git@gitlab.example.invalid:team/sub/web.git",
+    );
+    let (app_top, web_top) = (toplevel(&app), toplevel(&web));
+    let app_path = app.to_string_lossy().into_owned();
+    let web_path = web.to_string_lossy().into_owned();
+    assert_eq!(
+        text_of(&in_home(&home, &["serve", "list"])),
+        (Some(0), String::new(), String::new())
+    );
+    assert_eq!(
+        text_of(&in_home(&home, &["serve", "add", &app_path])),
+        (
+            Some(0),
+            format!("registered app: {app_top}\n"),
+            String::new()
+        )
+    );
+    let (code, out, err) = text_of(&in_home(
+        &home,
+        &["serve", "add", &web_path, "--name", "app"],
+    ));
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert!(err.contains("already registered as `app`"), "{err}");
+    assert_eq!(
+        text_of(&in_home(
+            &home,
+            &["serve", "add", &web_path, "--name", "site"]
+        ))
+        .1,
+        format!("registered site: {web_top}\n")
+    );
+    assert_eq!(
+        text_of(&in_home(&home, &["serve", "list"])).1,
+        format!("app  {app_top}\nsite  {web_top}\n")
+    );
+    let file = home.join(".gltree").join("repos.toml");
+    let kept = std::fs::read_to_string(&file).unwrap();
+    assert!(kept.contains("name = \"site\""), "{kept}");
+    assert_eq!(
+        text_of(&in_home(&home, &["serve", "remove", "app"])),
+        (Some(0), format!("removed app: {app_top}\n"), String::new())
+    );
+    let (code, _, err) = text_of(&in_home(&home, &["serve", "remove", "app"]));
+    assert_eq!(code, Some(2));
+    assert!(
+        err.contains("`app`") && err.contains("registered: site"),
+        "{err}"
+    );
+    assert_eq!(
+        text_of(&in_home(&home, &["serve", "list"])).1,
+        format!("site  {web_top}\n")
+    );
+    let (code, _, err) = text_of(&in_home(&home, &["serve", "list", "--port", "1"]));
+    assert_eq!(code, Some(2), "{err}");
+}
+
+#[test]
+fn serve_add_refuses_what_is_not_a_clone_of_a_gitlab_project_and_writes_nothing() {
+    let home = outside_a_clone("serve-refuse-home");
+    let plain = outside_a_clone("serve-refuse-plain");
+    let bad = clone_of("serve-refuse-bad-origin", "notaurl");
+    let bare = clone_without_config("serve-refuse-no-origin");
+    let good = clone_of(
+        "serve-refuse-good",
+        "https://gitlab.example.invalid/team/app.git",
+    );
+    let gone = home.join("gone");
+    for (path, name, says) in [
+        (plain.as_path(), None, "is not a git clone"),
+        (gone.as_path(), None, "is not a git clone"),
+        (bad.as_path(), None, "names no host and project path"),
+        (bare.as_path(), None, "origin"),
+        (good.as_path(), Some("a b"), "cannot name a repo"),
+        (good.as_path(), Some("a&b=c"), "cannot name a repo"),
+    ] {
+        let path = path.to_string_lossy().into_owned();
+        let mut args = vec!["serve", "add", path.as_str()];
+        args.extend(name.iter().flat_map(|n| ["--name", n]));
+        let (code, out, err) = text_of(&in_home(&home, &args));
+        assert_eq!((code, out.as_str()), (Some(2), ""), "{args:?}");
+        assert!(err.contains(says), "{args:?}: {err}");
+        assert!(!home.join(".gltree").exists(), "{args:?} wrote the list");
+    }
+}
+
+#[test]
+fn a_repo_list_that_cannot_be_read_stops_serve_before_the_address_but_not_a_snapshot() {
+    let home = outside_a_clone("serve-bad-list");
+    std::fs::create_dir_all(home.join(".gltree")).unwrap();
+    std::fs::write(home.join(".gltree").join("repos.toml"), "not toml").unwrap();
+    let mut child = gltree_cmd(&home, &["serve", "--port", "0"]);
+    let out = at_home(&mut child, &home).output().unwrap();
+    let (code, out, err) = text_of(&out);
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert!(
+        err.contains("repos.toml") && err.contains("malformed"),
+        "{err}"
+    );
+    let s = serve_from(at_home(
+        &mut gltree_cmd(
+            &home,
+            &["serve", "--snapshot", &fixture_path(), "--port", "0"],
+        ),
+        &home,
+    ));
+    assert_eq!(read_families(&s.base)["state"], "ready");
+}
+
+fn node(iid: u64, state: &str, title: &str, desc: &str, links: &[u64]) -> serde_json::Value {
+    serde_json::json!({
+        "iid": iid.to_string(),
+        "title": title,
+        "state": state,
+        "webUrl": format!("https://gitlab.example.invalid/x/-/issues/{iid}"),
+        "widgets": [
+            {"description": desc},
+            {"linkedItems": {"pageInfo": {"hasNextPage": false}, "nodes":
+                links.iter().map(|l| serde_json::json!({"workItem": {"iid": l.to_string()}})).collect::<Vec<_>>()}}
+        ]
+    })
+}
+
+fn stand_in(
+    nodes: Vec<serde_json::Value>,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&hits);
+    let body = serde_json::json!({"data": {"project": {"workItems": {
+        "pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}}}})
+    .to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("content-length")
+                {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut sink = vec![0; length];
+            let _ = reader.read_exact(&mut sink);
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, hits)
+}
+
+fn read_repos(base: &str) -> serde_json::Value {
+    let start = std::time::Instant::now();
+    loop {
+        let (status, v) = json_of("GET", &format!("{base}/api/repos"));
+        assert_eq!((status, &v["version"]), (200, &serde_json::json!(3)), "{v}");
+        if v["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["state"] != "reading")
+        {
+            return v;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "still reading: {v}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one_named() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let home = outside_a_clone("serve-registered-home");
+    let (app_port, app_hits) = stand_in(vec![
+        node(1, "OPEN", "app root", "+++\nchildren = [2]\n+++\n", &[2]),
+        node(2, "OPEN", "app child", "+++\nparent = 1\n+++\n", &[1]),
+        node(3, "CLOSED", "app done", "", &[]),
+    ]);
+    let (web_port, web_hits) = stand_in(vec![node(5, "OPEN", "web root", "", &[])]);
+    let app = clone_of(
+        "serve-registered-app",
+        "https://app.example.invalid/team/app.git",
+    );
+    let web = clone_of(
+        "serve-registered-web",
+        "https://web.example.invalid/team/web.git",
+    );
+    let gone = clone_of(
+        "serve-registered-gone",
+        "https://app.example.invalid/team/gone.git",
+    );
+    std::fs::write(
+        app.join(".gltree.toml"),
+        "[[badges]]\nprefix = \"SP\"\nname = \"Spec\"\n",
+    )
+    .unwrap();
+    for (dir, name) in [(&app, None), (&web, Some("site")), (&gone, None)] {
+        let path = dir.to_string_lossy().into_owned();
+        let mut args = vec!["serve", "add", path.as_str()];
+        args.extend(name.iter().flat_map(|n| ["--name", n]));
+        assert_eq!(in_home(&home, &args).status.code(), Some(0), "{args:?}");
+    }
+    std::fs::remove_dir_all(&gone).unwrap();
+    let glab = home.join("glab");
+    std::fs::create_dir_all(&glab).unwrap();
+    std::fs::write(
+        glab.join("config.yml"),
+        format!(
+            "hosts:\n    app.example.invalid:\n        api_host: 127.0.0.1:{app_port}\n        api_protocol: http\n        token: a-token\n    web.example.invalid:\n        api_host: 127.0.0.1:{web_port}\n        api_protocol: http\n        token: a-token\n"
+        ),
+    )
+    .unwrap();
+    let s = serve_from(
+        at_home(&mut gltree_cmd(&home, &["serve", "--port", "0"]), &home)
+            .env("GLAB_CONFIG_DIR", &glab)
+            .env_remove("GITLAB_TOKEN")
+            .stderr(std::process::Stdio::null()),
+    );
+    let v = read_repos(&s.base);
+    let repos = v["repos"].as_array().unwrap();
+    let field = |k: &str| repos.iter().map(|r| r[k].clone()).collect::<Vec<_>>();
+    assert_eq!(field("name"), ["app", "site", "gone"]);
+    assert_eq!(field("state"), ["ready", "ready", "failed"]);
+    assert_eq!(
+        field("open"),
+        [
+            serde_json::json!(2),
+            serde_json::json!(1),
+            serde_json::Value::Null
+        ]
+    );
+    assert_eq!(
+        field("families"),
+        [
+            serde_json::json!(2),
+            serde_json::json!(1),
+            serde_json::Value::Null
+        ]
+    );
+    let why = repos[2]["error"].as_str().unwrap();
+    assert!(why.contains("it is not there"), "{why}");
+    let (status, f) = json_of("GET", &format!("{}/api/families?repo=site", s.base));
+    assert_eq!(
+        (status, &f["repo"], family_numbers(&f)),
+        (200, &serde_json::json!("site"), vec![5])
+    );
+    let (status, f) = json_of("GET", &format!("{}/api/families?repo=app", s.base));
+    assert_eq!((status, family_numbers(&f)), (200, vec![1, 3]));
+    assert_eq!(f["badges"][0]["name"], "Spec");
+    assert_eq!(json_of("GET", &format!("{}/api/families", s.base)).0, 400);
+    assert_eq!(
+        json_of("GET", &format!("{}/api/families?repo=nope", s.base)).0,
+        404
+    );
+    let (status, g) = json_of("GET", &format!("{}/api/families?repo=gone", s.base));
+    assert_eq!((status, &g["state"]), (200, &serde_json::json!("failed")));
+    assert_eq!((app_hits.load(SeqCst), web_hits.load(SeqCst)), (1, 1));
+    let (status, r) = json_of("POST", &format!("{}/api/refresh?repo=app", s.base));
+    assert_eq!(
+        (status, &r["repo"], &r["state"]),
+        (200, &serde_json::json!("app"), &serde_json::json!("ready"))
+    );
+    assert_eq!((app_hits.load(SeqCst), web_hits.load(SeqCst)), (2, 1));
+    drop(s);
+    let s = serve_in_home(&home, &["--snapshot", &fixture_path()]);
+    assert_eq!(
+        json_of("GET", &format!("{}/api/repos", s.base)),
+        (200, serde_json::json!({"version": 3, "repos": []}))
+    );
+    assert_eq!(read_families(&s.base)["repo"], serde_json::Value::Null);
+}
+
+fn serve_in_home(home: &Path, args: &[&str]) -> Served {
+    serve_from(
+        at_home(&mut gltree_cmd(home, &["serve", "--port", "0"]), home)
+            .args(args)
+            .stderr(std::process::Stdio::null()),
+    )
+}
+
+#[test]
+fn serve_subcommands_explain_themselves() {
+    for (cmd, needles) in [
+        (
+            "add",
+            &[
+                "--name",
+                "repos.toml",
+                "origin",
+                "Examples:",
+                "Output:",
+                "Requirements:",
+                "Exit status:",
+            ][..],
+        ),
+        (
+            "list",
+            &[
+                "repos.toml",
+                "Examples:",
+                "Output:",
+                "Requirements:",
+                "Exit status:",
+            ][..],
+        ),
+        (
+            "remove",
+            &[
+                "repos.toml",
+                "Examples:",
+                "Output:",
+                "Requirements:",
+                "Exit status:",
+            ][..],
+        ),
+    ] {
+        let long = help_text(&["serve", cmd, "--help"]);
+        for n in needles {
+            assert!(long.contains(n), "serve {cmd} --help lacks {n}\n{long}");
+        }
+        assert!(long.contains(&format!("gltree serve {cmd}")), "{long}");
+        assert!(!help_text(&["serve", cmd, "-h"]).contains("Examples:"));
+    }
+    let serve = help_text(&["serve", "--help"]);
+    assert!(!serve.contains("every command first reads"), "{serve}");
+    assert!(
+        serve.contains("reads each registered clone's instead"),
+        "{serve}"
+    );
+    let top = help_text(&["--help"]);
+    assert!(top.contains("registered by `gltree serve add`"), "{top}");
+    for help in [
+        help_text(&["serve", "--help"]),
+        help_text(&["help", "serve"]),
+    ] {
+        for n in [
+            "~/.gltree/repos.toml",
+            "serve add",
+            "serve list",
+            "serve remove",
+            "a tab",
+            "shows the clone it runs in",
+        ] {
+            assert!(help.contains(n), "{n}\n{help}");
+        }
+    }
 }

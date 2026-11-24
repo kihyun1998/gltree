@@ -268,6 +268,9 @@ Text: `#N key [before] -> [after]` per change, then `N items would change` (with
 gltree serve                             # http://127.0.0.1:7420/, read from the server
 gltree serve --snapshot tracker.json     # from a file; refresh reads the file again
 gltree serve --port 0                    # a free port
+gltree serve add ../web --name site      # show another clone's tracker too
+gltree serve list                        # the repos serve shows
+gltree serve remove site                 # take one off the list
 ```
 
 Starts a local web server on `127.0.0.1` only, prints its address at once and serves a page until
@@ -276,7 +279,7 @@ is reading, and the terminal says on stderr when it starts and when it ends, wit
 families and the time it took, or why it failed. A first read that fails leaves the server running:
 the page shows why, and the refresh button reads again. What can be checked without the network is
 checked before the address is printed, and a failure there stops with exit status 2: the repo
-config, the port, and for the server git's `origin`, the glab login and the CA certificate, or for
+list, the repo config, the port, and for the server git's `origin`, the glab login and the CA certificate, or for
 `--snapshot` that the file opens and is not a directory. On the left are the families, as `gltree tree` with no number picks
 them (the finished ones behind a toggle), newest (highest number) first, each with its title, a
 progress bar, how many items are left and its badges. Every count above the list spans every family,
@@ -290,9 +293,30 @@ whole tracker again, which takes as long as `gltree tree` does without a number.
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
 the token stays in the server process.
 
+`gltree serve` shows one tracker, the clone it runs in, until repos are registered. `gltree serve add
+PATH` registers the clone at PATH in `~/.gltree/repos.toml` (`~` being your home folder,
+`%USERPROFILE%` on Windows), under the last part of its GitLab project's path unless `--name` gives
+another; a name is 1 to 64 letters, digits, `.`, `_` or `-`. It refuses a path that is not a git
+clone, a clone whose `origin` names no GitLab project and a name already taken, and does not need a
+`.gltree.toml`. `gltree serve list` prints `NAME  PATH` per repo in the order they were registered,
+and `gltree serve remove NAME` takes one off. With at least one repo registered, `gltree serve` shows
+every one of them wherever it runs, and reads each clone's `origin`, `.gltree.toml` and glab login
+as it would inside it: a row of tabs above the page names each repo with its open items (`app 78
+left`), a dot marking one still being read or one whose read failed (its tooltip says why), and the
+chosen tab shows that repo's page as above and stays in the address after `#`, so a reload keeps it.
+Every registered repo is read at start, all at once; the refresh button reads the repo shown. A
+registered clone that is gone, or whose `origin`, login or `.gltree.toml` fails, fails its own tab
+and leaves the others running. `--snapshot` shows that file alone and leaves the list out. No other
+command reads the list: each keeps taking its tracker from the clone it runs in.
+
 The page reads a small JSON API:
 
-- `GET /api/families`: `{"version": 2, "state", "error", "read_at", "badges", "tree"}`. `state` is
+- `GET /api/repos`: `{"version": 3, "repos": [{"name", "state", "error", "read_at", "families",
+  "open"}]}`, the registered repos in the order they were registered; `families` and `open` count
+  the families and open items of the last full read that succeeded, `null` until one has. With no
+  repo registered, or with `--snapshot`, `repos` is empty.
+- `GET /api/families`: `{"version": 3, "repo", "state", "error", "read_at", "badges", "tree"}`. `repo`
+  is the repo's name, `null` with no repo registered. `state` is
   `reading` while a full read runs, `ready` when the last one succeeded and `failed` when it failed,
   with `error` saying why (`null` otherwise). `tree` is the last full read that succeeded, as
   `gltree tree --all --json` (version 3) gives it, and `read_at` its UTC time; both are `null` until
@@ -302,7 +326,11 @@ The page reads a small JSON API:
 - `GET /api/tree/N`: N's tree as `gltree tree N --json` gives it, read fresh; 404 for a number the
   tracker does not hold.
 
-An error answers `{"version": 2, "error"}`: 404 for an unknown path or number, 405 (with
+With repos registered, `/api/families`, `/api/refresh` and `/api/tree/N` name one with
+`?repo=NAME`, compared as sent: without it they answer 400, and 404 for a name not registered. With
+none registered they take no `repo` and answer 404 to one.
+
+An error answers `{"version": 3, "error"}`: 404 for an unknown path or number, 405 (with
 `Allow`) for a known path asked with another method, 400 and 413 for a request it cannot read or a
 body it does not take, 502 when the tracker could not be read. The server answers only requests
 addressed to `127.0.0.1` or `localhost` at its port (403 otherwise), and the API only its own page:

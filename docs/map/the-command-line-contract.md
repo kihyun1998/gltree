@@ -18,12 +18,22 @@ implementation, which is why its output is what callers read; it does not decide
   family and is a usage error (exit 2) beside a number. Leaving families out gives fewer `roots`, not
   another shape; `tree N --json`, which outside skills read, draws as before (#25).
 - **JSON shapes carry a version**, raised when the shape changes — a field added, removed or renamed; fewer items is not a shape change (#25): `tree` 3 (`url`, `labels` and `extra` on every node, #26), `check` 1,
-  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 2 (each module's `JSON_VERSION`,
+  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 3 (each module's `JSON_VERSION`,
   `NEW_JSON_VERSION`). The shapes are in the README and in each owning note.
 - **`serve`** listens on 127.0.0.1 only, port 7420 unless `--port` (0 takes a free one), and prints
   `http://127.0.0.1:<port>/` before its first full read, which runs in the background; what stops it
-  with exit 2 before the address, and why a failed first read does not, and its four routes and their
+  with exit 2 before the address, and why a failed first read does not, and its five routes and their
   JSON are in [serving-the-viewer](serving-the-viewer.md).
+- **`serve` is the one command that can run outside a clone on purpose** (#45, maintainer,
+  2026-11-24): with repos registered in `~/.gltree/repos.toml` it shows each of them wherever it
+  runs, and `serve add PATH [--name N]`, `serve list` and `serve remove N` keep that list and run
+  anywhere. They are subcommands of `serve` (`ServeList`, `args_conflicts_with_subcommands`, so
+  `serve list --port 1` is a usage error), and `gltree serve` with no subcommand still runs the
+  server, with no `serve run`. Every other command takes its tracker from the clone it runs in, as
+  before: `run` dispatches `serve` to `serve_command` and the rest, a flattened `InClone`, to
+  `run_in_clone`, which reads the repo config of the folder it runs in once, before the command.
+  `serve add` prints `registered NAME: PATH`, `serve list` one `NAME  PATH` line per repo and nothing
+  for none, `serve remove` `removed NAME: PATH`; each exits 2 with the reason on a refusal.
 - **Item numbers** are accepted as `N` or `#N` (`parse_iid`).
 - **The help is the first-time user's manual** (#34): `-h` gives each command's one-line `about` and
   every option's short `help`; `--help` adds the `long_about`, each option's `long_help` where the
@@ -40,9 +50,11 @@ implementation, which is why its output is what callers read; it does not decide
   from naming `gltree.exe` on Windows (clap takes argv[0] only when `bin_name` is unset).
 - **`--snapshot` outside a clone runs with the default repo config**, as [reading-the-repo-config](reading-the-repo-config.md) says; the help tells people to run it in the clone all the same.
 - **Tests that hold the help**: every command has an about, a long description, the four sections
-  and at least two examples that parse with clap, and every argument a help line
+  and at least two examples that parse with clap (one for a command that takes no argument, such as
+  `serve list`), and every argument a help line
   (`every_command_explains_itself_with_examples_that_parse`); every line but an example fits 80
-  columns (`every_help_line_but_an_example_fits_80_columns`); `tests/cli.rs` reads `--help` and `-h`
+  columns (`every_help_line_but_an_example_fits_80_columns`); both tests walk `serve`'s subcommands
+  too; `tests/cli.rs` reads `--help` and `-h`
   for every command.
 - **What callers are known to read** (read in the callers, 2026-11-19; not named here, maintainer,
   2026-11-19): consuming repositories commit `.gltree.toml` with `state_policy` and `extra_keys` and
@@ -53,7 +65,7 @@ implementation, which is why its output is what callers read; it does not decide
   `edit --set-extra`.
 
 ## Code
-- `src/main.rs — Cli, Command, parse_iid, parse_extra, unreadable_dir, current_dir, server, source, main, run`
+- `src/main.rs — Cli, Command, InClone, ServeList, parse_iid, parse_extra, unreadable_dir, current_dir, server, server_in, source, main, run, run_in_clone, serve_command`
 - `src/main.rs — tests::every_command_explains_itself_with_examples_that_parse, tests::every_help_line_but_an_example_fits_80_columns, tests::the_usage_line_names_gltree_on_every_platform`
 - `tests/cli.rs`
 - `README.md` (the user-facing shapes)
