@@ -312,9 +312,9 @@ mod tests {
     #[test]
     fn a_list_that_cannot_be_written_says_it_could_not_write_it() {
         let dir = scratch("unwritable");
-        std::fs::write(dir.join(".gltree"), "a file where the folder goes").unwrap();
         let mut r = RepoList::load(RepoList::file_in(&dir)).unwrap();
         r.add("app", dir.join("app")).unwrap();
+        std::fs::write(dir.join(".gltree"), "a file where the folder goes").unwrap();
         let e = r.save().unwrap_err().to_string();
         assert!(
             e.starts_with("cannot write the repo list ") && e.contains("repos.toml"),
