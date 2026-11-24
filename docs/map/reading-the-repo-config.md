@@ -40,7 +40,9 @@ its own first-line words, and the badges `serve` shows.
   no config of the folder it runs in, and reads each registered clone's through `registered_config`,
   which names a failure by the file's path, `<clone>/.gltree.toml: <reason>`, as a clone's own read names `.gltree.toml` (an `Error::Refused` carrying `config::Error`'s reason, which does not tell an unreadable file from a refused one), and fails that repo's tab
   only, so one broken config does not stop the others (worker's judgement, 2026-11-24, following the
-  issue's rule that a missing clone fails its tab only). `serve add`, `serve list` and `serve remove`
+  issue's rule that a missing clone fails its tab only). It is read again with each full read, so a
+  config changed while `serve` runs takes effect on the next refresh (#46; when and what keeps it:
+  [serving-the-viewer](serving-the-viewer.md)). `serve add`, `serve list` and `serve remove`
   read no config at all. `toplevel` is shared with `repos::clone_at`, which takes a clone's top
   folder as the path it registers.
 

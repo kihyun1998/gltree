@@ -40,15 +40,26 @@ reasons below.
   before (`main::serve_clone`); with `--snapshot`, that file alone, the list not even read, so a
   broken list does not stop it. A list that cannot be read stops `serve` with exit 2 before the
   address. Each registered repo is a `serve::Repo`: its name, its `Open` over `main::registered_tracker`,
-  its repo config read from its clone at start (`registered_config`) and its kept read. Before the
-  address, each clone's config, `origin` and glab login are read with no network (`server_in`, the
-  same as `server` with the clone's folder); a failure there (a clone that is gone, a config refused,
-  an `origin` or login that fails) becomes that repo's first read, so its tab fails with the reason and
-  the others run. A config refused at start leaves that repo on the default config: a refresh after
-  the fix reads the tracker but shows no badges until `serve` starts again (see Known holes). Every
+  its `Configure` over `main::registered_config` and its kept read. Before the address, each clone's
+  `origin` and glab login are read with no network (`server_in`, the same as `server` with the
+  clone's folder); a failure there (a clone that is gone, an `origin` or login that fails) becomes that
+  repo's first read, so its tab fails with the reason and the others run. Every
   repo's first full read starts at once, each on its own thread (`App::start` with the repo's index),
   since one read of a real tracker takes about 30–45 s (maintainer, 2026-11-24); stderr says when they
   start and, per repo with its name first, when each ends. A refresh reads the repo it names only.
+- **A registered repo's config is read with each full read** (#46). `Repo::read_all` opens the
+  tracker, then reads the config through `Configure`, then reads the tree with it; a read that
+  succeeds keeps that config in `Kept` beside the tree, and `/api/families`' `badges` and every
+  later walk of `/api/tree/N` use it until the next full read succeeds. A config refused or unreadable
+  fails that read like any other failure: the first read's tab fails naming the file
+  (`<clone>/.gltree.toml: …`), a refresh keeps the last good tree and its config and answers 502
+  with the same reason, and the other repos are untouched; the refresh after the fix takes the new
+  config. Until a first read succeeds the repo has the default config, which shows no badges and no
+  tree. A walk reads no config: it takes the kept one, so the walked tree and the list keep one config
+  between refreshes (#46, worker's judgement, 2026-11-24, following the issue's plan). With no repo
+  registered, `serve_clone` reads the clone's config once before the address and a broken one stops
+  `serve` with exit 2, as before; that `Repo` has no `Configure` and keeps the config it was given.
+  `RepoConfig::scheme` knows one scheme, so today only `badges` shows which config a read used.
 - **Two reads.** The full read (`tree::tree` with no root, every family, finished ones included)
   starts once the address is printed, on a thread of its own (`App::start`), and again on
   `POST /api/refresh`; its answer is kept and `GET /api/families` serves the kept one. `GET /api/tree/N` reads N's tree fresh: against
@@ -57,7 +68,7 @@ reasons below.
   so the page shows the kept read at once and swaps in the walked tree when it arrives.
 - **The tracker is opened per read** through `serve::Open`, a closure `main` builds over `source`,
   the same opener every other command uses (for a registered repo, over `registered_tracker`, which
-  checks the clone is there and reads its config before `server_in`): a `SnapshotFile` for `--snapshot`, otherwise `server()`,
+  checks the clone is there before `server_in` and reads no config): a `SnapshotFile` for `--snapshot`, otherwise `server()`,
   with a failure to open kept as the tracker's own error — so a refresh after a new login picks it up,
   and `App` holds no tracker across threads. The token lives inside `GitLab` and no response carries
   anything but tree JSON and error messages (`App::handle`).
@@ -321,14 +332,14 @@ reasons below.
   keeps [listing-roots](listing-roots.md)' boundary: label meanings are the caller's.
 
 ## Code
-- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, Repo, Repo::named, App, Kept, Done, App::new, App::registered, App::start, App::repos_json, App::repo, Repo::refresh, Repo::begin, Repo::finish, Repo::read_all, Repo::families, Repo::summary, Repo::tree_of, open_items, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, Configure, Repo, Repo::named, App, Kept, Kept::new, Done, App::new, App::registered, App::start, App::repos_json, App::repo, Repo::refresh, Repo::begin, Repo::finish, Repo::read_all, Repo::families, Repo::summary, Repo::tree_of, open_items, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
 - `src/repos.rs — Repo, RepoList, RepoList::file_in, RepoList::load, RepoList::add, RepoList::remove, RepoList::save, name_error, clone_at, default_name`
 - `src/snapshot.rs — SnapshotFile::open` (the check before the address, a directory refused)
 - `src/config.rs — Badge` (serialised as it is into `/api/families`' `badges`)
 - `src/tracker.rs — FakeTracker::fail_all_items` (the unit test that a walk reads no full tracker)
 - `src/serve.html`
-- `src/main.rs — Command::Serve, ServeList, serve_command, repo_list, registered_config, registered_tracker, serve_clone, serve_registered, listen, print_address, source, server, server_in`
-- `tests/cli.rs — serve_in, read_families, serve_that_stops, the serve_* tests, at_home, in_home, stand_in, read_repos`; `gltree` and `gltree_cmd` give every command they start a temporary home (`HOME` and `USERPROFILE`), and every test that runs `serve` or a `serve` subcommand starts it through them; the few tests that start the binary by hand run `tree`, `check`, `new`, `move` and `sync`, which never read `~/.gltree`; `serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one_named` serves three registered clones, two backed by local stand-ins that answer every GraphQL request with one page of work items and count the requests, and one whose folder is deleted; `serve_prints_its_address_while_the_first_read_still_waits_on_the_server` holds the first read behind a local listener that never answers, since a snapshot's read ends too fast to show the order
+- `src/main.rs — Command::Serve, ServeList, serve_command, repo_list, registered_clone, registered_config, registered_tracker, serve_clone, serve_registered, listen, print_address, source, server, server_in`
+- `tests/cli.rs — serve_in, read_families, serve_that_stops, the serve_* tests, at_home, in_home, stand_in, read_repos`; `gltree` and `gltree_cmd` give every command they start a temporary home (`HOME` and `USERPROFILE`), and every test that runs `serve` or a `serve` subcommand starts it through them; the few tests that start the binary by hand run `tree`, `check`, `new`, `move` and `sync`, which never read `~/.gltree`; `serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one_named` serves three registered clones, two backed by local stand-ins that answer every GraphQL request with one page of work items and count the requests, and one whose folder is deleted, then rewrites one clone's `.gltree.toml` and breaks it, refreshing after each; `serve_prints_its_address_while_the_first_read_still_waits_on_the_server` holds the first read behind a local listener that never answers, since a snapshot's read ends too fast to show the order
 
 ## Reference behaviour
 **None.**
@@ -345,9 +356,6 @@ reasons below.
 - [reading-the-server](reading-the-server.md) — a refresh costs a full read; selecting a family costs a walk.
 
 ## Known holes / open
-- A registered repo whose `.gltree.toml` is refused at start is served on the default config: a
-  refresh after the file is fixed reads the tracker, with no badges until `serve` starts again, since
-  `Repo` keeps the config it was given (#45, worker's judgement, 2026-11-24).
 - #45's page was checked in headless Edge over CDP at 1440×900 against the real binary, three
   registered clones and two local stand-in GraphQL servers, one holding its first answer 3 s
   (2026-11-24): the tabs in order with `app` chosen and written after `#`; the reading dot, then

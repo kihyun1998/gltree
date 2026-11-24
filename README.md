@@ -305,10 +305,12 @@ every one of them wherever it runs, and reads each clone's `origin`, `.gltree.to
 as it would inside it: a row of tabs above the page names each repo with its open items (`app 78
 left`), a dot marking one still being read or one whose read failed (its tooltip says why), and the
 chosen tab shows that repo's page as above and stays in the address after `#`, so a reload keeps it.
-Every registered repo is read at start, all at once; the refresh button reads the repo shown. A
+Every registered repo is read at start, all at once; the refresh button reads the repo shown, its
+`.gltree.toml` included, so a config changed while `serve` runs shows on the next refresh. A
 registered clone that is gone, or whose `origin`, login or `.gltree.toml` fails, fails its own tab
-and leaves the others running. `--snapshot` shows that file alone and leaves the list out. No other
-command reads the list: each keeps taking its tracker from the clone it runs in.
+and leaves the others running; a refresh that fails keeps the repo's last read on the page.
+`--snapshot` shows that file alone and leaves the list out. No other command reads the list: each
+keeps taking its tracker from the clone it runs in.
 
 The page reads a small JSON API:
 

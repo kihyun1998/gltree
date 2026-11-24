@@ -21,12 +21,17 @@ const BODY_LIMIT: u64 = 64 * 1024;
 /// handed to `App::start`.
 pub type Open = Box<dyn Fn() -> Result<Box<dyn Tracker + Send>, Error> + Send + Sync>;
 
-/// One tracker the server shows: how to open it, its repo config and its last full read.
+/// Reads a registered repo's config for one full read; a read that succeeds keeps the config it
+/// read for the badges and the walks until the next one succeeds.
+pub type Configure = Box<dyn Fn() -> Result<RepoConfig, Error> + Send + Sync>;
+
+/// One tracker the server shows: how to open it, how to read its repo config, and its last full
+/// read with the config that read used.
 pub struct Repo {
     name: Option<String>,
     open: Open,
+    configure: Option<Configure>,
     walk: bool,
-    config: RepoConfig,
     kept: Mutex<Kept>,
 }
 
@@ -37,11 +42,22 @@ pub struct App {
     port: u16,
 }
 
-#[derive(Default)]
 struct Kept {
     reading: bool,
     read: Option<Done>,
     failed: Option<String>,
+    config: RepoConfig,
+}
+
+impl Kept {
+    fn new(config: RepoConfig) -> Kept {
+        Kept {
+            reading: false,
+            read: None,
+            failed: None,
+            config,
+        }
+    }
 }
 
 struct Done {
@@ -118,14 +134,15 @@ struct Response {
 }
 
 impl Repo {
-    /// A registered repo, shown under `name`, with nothing read yet.
-    pub fn named(name: String, open: Open, walk: bool, config: RepoConfig) -> Repo {
+    /// A registered repo, shown under `name`, with nothing read yet; each full read reads its
+    /// config through `configure` with its tracker.
+    pub fn named(name: String, open: Open, configure: Configure, walk: bool) -> Repo {
         Repo {
             name: Some(name),
             open,
+            configure: Some(configure),
             walk,
-            config,
-            kept: Mutex::new(Kept::default()),
+            kept: Mutex::new(Kept::new(RepoConfig::defaults())),
         }
     }
 
@@ -160,7 +177,7 @@ impl Repo {
         let mut kept = self.kept();
         kept.reading = false;
         match read {
-            Ok(tree) => {
+            Ok((tree, config)) => {
                 let roots = tree["roots"].as_array().map_or(&[][..], Vec::as_slice);
                 let families = roots.len();
                 let open = roots.iter().map(open_items).sum();
@@ -175,6 +192,7 @@ impl Repo {
                     open,
                 });
                 kept.failed = None;
+                kept.config = config;
                 Ok(families)
             }
             Err(e) => {
@@ -187,13 +205,17 @@ impl Repo {
     fn read_all(
         &self,
         first: Option<Result<Box<dyn Tracker + Send>, Error>>,
-    ) -> Result<Value, Error> {
+    ) -> Result<(Value, RepoConfig), Error> {
         let tracker = match first {
             Some(t) => t?,
             None => (self.open)()?,
         };
-        let nodes = tree::tree(tracker.as_ref(), self.config.scheme().as_ref(), None)?;
-        Ok(tree::to_json(&nodes))
+        let config = match &self.configure {
+            Some(configure) => configure()?,
+            None => self.kept().config.clone(),
+        };
+        let nodes = tree::tree(tracker.as_ref(), config.scheme().as_ref(), None)?;
+        Ok((tree::to_json(&nodes), config))
     }
 
     fn kept(&self) -> std::sync::MutexGuard<'_, Kept> {
@@ -217,7 +239,7 @@ impl Repo {
             "state": state,
             "error": if state == "failed" { json!(kept.failed) } else { Value::Null },
             "read_at": kept.read.as_ref().map(|r| &r.at),
-            "badges": self.config.badges,
+            "badges": kept.config.badges,
             "tree": kept.read.as_ref().map(|r| &r.tree),
         })
     }
@@ -236,8 +258,8 @@ impl Repo {
     }
 
     fn tree_of(&self, n: u64) -> Result<Value, Error> {
+        let scheme = self.kept().config.scheme();
         let tracker = (self.open)()?;
-        let scheme = self.config.scheme();
         let nodes = if self.walk {
             tree::live_tree(tracker.as_ref(), scheme.as_ref(), n)?
         } else {
@@ -262,9 +284,9 @@ impl App {
             repos: vec![Repo {
                 name: None,
                 open,
+                configure: None,
                 walk,
-                config,
-                kept: Mutex::new(Kept::default()),
+                kept: Mutex::new(Kept::new(config)),
             }],
             registered: false,
             port,
@@ -1268,10 +1290,8 @@ mod tests {
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(Box::new(FakeTracker::new(made())) as Box<dyn Tracker + Send>)
         });
-        (
-            Repo::named(name.into(), open, false, RepoConfig::defaults()),
-            opens,
-        )
+        let configure: Configure = Box::new(|| Ok(RepoConfig::defaults()));
+        (Repo::named(name.into(), open, configure, false), opens)
     }
 
     fn two_repos() -> (
@@ -1459,6 +1479,114 @@ mod tests {
         );
         let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
         assert_eq!((&f["state"], &f["tree"]), (&json!("failed"), &Value::Null));
+    }
+
+    fn badged(name: &str) -> RepoConfig {
+        let mut config = RepoConfig::defaults();
+        config.badges = vec![Badge {
+            prefix: "reg::".into(),
+            name: name.into(),
+            extra: None,
+            missing: None,
+        }];
+        config
+    }
+
+    fn configured(held: &Arc<Mutex<Result<RepoConfig, String>>>) -> App {
+        let open: Open =
+            Box::new(|| Ok(Box::new(FakeTracker::new(items())) as Box<dyn Tracker + Send>));
+        let read = Arc::clone(held);
+        let configure: Configure =
+            Box::new(move || read.lock().unwrap().clone().map_err(Error::Refused));
+        let (web, _) = counted("web", web_items);
+        App::registered(
+            vec![Repo::named("app".into(), open, configure, false), web],
+            7420,
+        )
+    }
+
+    fn badge_name(v: &Value) -> Value {
+        v["badges"][0]["name"].clone()
+    }
+
+    #[test]
+    fn a_refresh_reads_the_config_with_the_tracker_and_the_badges_follow_it() {
+        let held = Arc::new(Mutex::new(Ok(badged("Before"))));
+        let a = configured(&held);
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        assert_eq!(badge_name(&body(&r)), "Before");
+        *held.lock().unwrap() = Ok(badged("After"));
+        let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
+        assert_eq!(badge_name(&f), "Before");
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        assert_eq!(
+            (r.status, badge_name(&body(&r))),
+            (Status::Ok, json!("After"))
+        );
+        let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
+        assert_eq!(badge_name(&f), "After");
+    }
+
+    #[test]
+    fn a_config_broken_while_serving_fails_that_repo_alone_and_keeps_its_last_read() {
+        let held = Arc::new(Mutex::new(Ok(badged("Before"))));
+        let a = configured(&held);
+        a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        a.handle(&asking("POST", "/api/refresh", "repo=web"));
+        let at = body(&a.handle(&asking("GET", "/api/families", "repo=app")))["read_at"].clone();
+        *held.lock().unwrap() = Err("/clones/app/.gltree.toml: unknown field `root_lable`".into());
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        assert_eq!(r.status, Status::BadGateway);
+        assert!(
+            body(&r)["error"]
+                .as_str()
+                .unwrap()
+                .contains("/clones/app/.gltree.toml"),
+            "{}",
+            body(&r)
+        );
+        let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
+        assert_eq!(f["state"], "failed");
+        assert!(f["error"].as_str().unwrap().contains("root_lable"), "{f}");
+        assert_eq!(
+            (numbers(&f), &f["read_at"], badge_name(&f)),
+            (vec![1, 3], &at, json!("Before"))
+        );
+        let w = body(&a.handle(&asking("GET", "/api/families", "repo=web")));
+        assert_eq!((&w["state"], numbers(&w)), (&json!("ready"), vec![5, 7]));
+        *held.lock().unwrap() = Ok(badged("After"));
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        assert_eq!(
+            (r.status, &body(&r)["state"], badge_name(&body(&r))),
+            (Status::Ok, &json!("ready"), json!("After"))
+        );
+    }
+
+    #[test]
+    fn a_config_refused_at_start_takes_effect_on_the_refresh_after_the_fix() {
+        let held = Arc::new(Mutex::new(Err("/clones/app/.gltree.toml: refused".into())));
+        let a = Arc::new(configured(&held));
+        a.start(0, Ok(Box::new(FakeTracker::new(items()))), |_| {})
+            .join()
+            .unwrap();
+        let f = body(&a.handle(&asking("GET", "/api/families", "repo=app")));
+        assert_eq!(
+            (&f["state"], &f["tree"], &f["badges"]),
+            (&json!("failed"), &Value::Null, &json!([]))
+        );
+        assert!(
+            f["error"]
+                .as_str()
+                .unwrap()
+                .contains("/clones/app/.gltree.toml"),
+            "{f}"
+        );
+        *held.lock().unwrap() = Ok(badged("After"));
+        let r = a.handle(&asking("POST", "/api/refresh", "repo=app"));
+        assert_eq!(
+            (r.status, numbers(&body(&r)), badge_name(&body(&r))),
+            (Status::Ok, vec![1, 3], json!("After"))
+        );
     }
 
     #[test]

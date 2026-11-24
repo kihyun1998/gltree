@@ -1589,6 +1589,49 @@ fn serve_with_repos_registered_shows_each_wherever_it_runs_and_refreshes_the_one
         (200, &serde_json::json!("app"), &serde_json::json!("ready"))
     );
     assert_eq!((app_hits.load(SeqCst), web_hits.load(SeqCst)), (2, 1));
+    std::fs::write(
+        app.join(".gltree.toml"),
+        "[[badges]]\nprefix = \"SP\"\nname = \"Specification\"\n",
+    )
+    .unwrap();
+    let (_, f) = json_of("GET", &format!("{}/api/families?repo=app", s.base));
+    assert_eq!(f["badges"][0]["name"], "Spec");
+    let (status, r) = json_of("POST", &format!("{}/api/refresh?repo=app", s.base));
+    assert_eq!(
+        (status, &r["badges"][0]["name"]),
+        (200, &serde_json::json!("Specification"))
+    );
+    let at = r["read_at"].clone();
+    std::fs::write(app.join(".gltree.toml"), "root_lable = \"X\"\n").unwrap();
+    let (status, r) = json_of("POST", &format!("{}/api/refresh?repo=app", s.base));
+    let why = r["error"].as_str().unwrap();
+    assert_eq!(status, 502, "{r}");
+    assert!(
+        why.contains("serve-registered-app")
+            && why.contains(".gltree.toml: ")
+            && why.contains("root_lable"),
+        "{why}"
+    );
+    let (_, f) = json_of("GET", &format!("{}/api/families?repo=app", s.base));
+    assert_eq!(
+        (
+            &f["state"],
+            family_numbers(&f),
+            &f["read_at"],
+            &f["badges"][0]["name"]
+        ),
+        (
+            &serde_json::json!("failed"),
+            vec![1, 3],
+            &at,
+            &serde_json::json!("Specification")
+        )
+    );
+    let (_, f) = json_of("GET", &format!("{}/api/families?repo=site", s.base));
+    assert_eq!(
+        (&f["state"], family_numbers(&f)),
+        (&serde_json::json!("ready"), vec![5])
+    );
     drop(s);
     let s = serve_in_home(&home, &["--snapshot", &fixture_path()]);
     assert_eq!(

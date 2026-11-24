@@ -179,8 +179,8 @@ Requirements:
             reads_the_whole_tracker!(),
             "  With no repo registered, it first reads the clone's `.gltree.toml` when
   there is one, and stops when it cannot read it. With repos registered, it
-  reads each registered clone's instead, and one that fails fails that
-  repo's tab only.
+  reads each registered clone's instead, again on each refresh of its tab,
+  and one that fails fails that repo's tab only, which keeps its last read.
 ",
             "
 Exit status:
@@ -218,8 +218,8 @@ enum ServeList {
         long_about = "Adds the clone at PATH to the list gltree serve shows, ~/.gltree/repos.toml,
 under NAME: the last part of the GitLab project's path, unless --name gives
 another. Its tab shows the project the clone's `origin` names, with the
-clone's `.gltree.toml`, both read each time serve starts. Every other
-command keeps reading the clone it runs in.",
+clone's `.gltree.toml`, both read when serve starts and again on each
+refresh of its tab. Every other command keeps reading the clone it runs in.",
         after_long_help = concat!(
             "Examples:
   gltree serve add .                      # the clone you are in
@@ -939,20 +939,25 @@ fn repo_list() -> Result<RepoList, TrackerError> {
     RepoList::load(RepoList::file_in(&home))
 }
 
-fn registered_config(path: &Path) -> Result<RepoConfig, TrackerError> {
-    if !path.is_dir() {
-        return Err(TrackerError::unreadable(
-            format!("the clone {}", path.display()),
-            "it is not there",
-        ));
+fn registered_clone(path: &Path) -> Result<(), TrackerError> {
+    if path.is_dir() {
+        return Ok(());
     }
+    Err(TrackerError::unreadable(
+        format!("the clone {}", path.display()),
+        "it is not there",
+    ))
+}
+
+fn registered_config(path: &Path) -> Result<RepoConfig, TrackerError> {
+    registered_clone(path)?;
     RepoConfig::of_clone(path).map_err(|e| {
         TrackerError::Refused(format!("{}: {}", path.join(config::FILE).display(), e.0))
     })
 }
 
 fn registered_tracker(path: &Path) -> Result<Box<dyn Tracker + Send>, TrackerError> {
-    registered_config(path)?;
+    registered_clone(path)?;
     Ok(Box::new(server_in(path)?))
 }
 
@@ -1038,17 +1043,11 @@ fn serve_registered(
     let mut shown = Vec::with_capacity(registered.len());
     let mut firsts = Vec::with_capacity(registered.len());
     for repo in registered {
-        let (config, first) = match registered_config(&repo.path) {
-            Ok(config) => {
-                let first =
-                    server_in(&repo.path).map(|server| Box::new(server) as Box<dyn Tracker + Send>);
-                (config, first)
-            }
-            Err(e) => (RepoConfig::defaults(), Err(e)),
-        };
-        let path = repo.path.clone();
-        let open: serve::Open = Box::new(move || registered_tracker(&path));
-        shown.push(serve::Repo::named(repo.name.clone(), open, true, config));
+        let first = registered_tracker(&repo.path);
+        let (opened, configured) = (repo.path.clone(), repo.path.clone());
+        let open: serve::Open = Box::new(move || registered_tracker(&opened));
+        let configure: serve::Configure = Box::new(move || registered_config(&configured));
+        shown.push(serve::Repo::named(repo.name.clone(), open, configure, true));
         firsts.push((repo.name, first));
     }
     let app = Arc::new(serve::App::registered(shown, port));
