@@ -126,7 +126,7 @@ function rels(r){const fam=flat(r),here=new Map(fam.map(({n})=>[n.number,n]));
  if(!gs.length)return '';
  return '<div class="rels">'+gs.map(({k,name,out})=>{const all=relMore.has(k);
   return '<div data-k="'+esc(k)+'"><div class="k">'+esc(name)+'</div>'+(all?out:out.slice(0,5)).map(({src,t})=>{const h=here.get(t),w=h?null:where(t),n=h||(w&&w.n),key=' data-j="'+esc(k+':'+src+':'+t)+'"',
-    inner=(src!==r.number?'<span class="src">#'+esc(src)+' →</span>':'')+(n?mark(n):'<span class="st"></span>')+'<span class="num">#'+esc(t)+'</span>'+(n?title(n):'')+(w&&w.root.number!==r.number?'<span class="in">in #'+esc(w.root.number)+'</span>':'');
+    inner=(src!==r.number?'<span class="src">#'+esc(src)+' →</span>':'')+(n?mark(n):'<span class="st"></span>')+'<span class="num">#'+esc(t)+'</span>'+(n?title(n):'')+(w&&w.root.number!==r.number&&w.root.number!==t?'<span class="in">in #'+esc(w.root.number)+'</span>':'');
    return n?'<button class="rel"'+key+' data-t="'+esc(t)+'">'+inner+'</button>':'<div class="rel"'+key+'>'+inner+'</div>'}).join('')
    +(!all&&out.length>5?'<button class="more" data-g="'+esc(k)+'">'+esc(out.length-5)+' more</button>':'')+'</div>'}).join('')+'</div>'}
 function detail(r,note){if(!r)return '<div class="detail" id="det"><div class="empty">Nothing left to do</div></div>';

@@ -180,7 +180,8 @@ reasons below.
   three groups, Related, Found while working on, Blocks, each left out when empty, and the whole box
   left out when all three are. A row is the target's mark, number and title, `#S →` before it when
   the relation is item S's rather than the root's, and `in #R` after it when the target's family is
-  not the drawn one. A target in the drawn family is read from it; one in another family from the
+  not the drawn one and the target is not R itself, since `#R … in #R` would name it twice (maintainer,
+  2026-11-24, after #47 shipped it on every relation to a one-item family). A target in the drawn family is read from it; one in another family from the
   kept full read (`where`, an index of `data.tree` built once per full read), which holds every
   family, finished ones included. A target in neither (deleted, or newer than the full read) shows
   its number alone and is not a button (worker's judgement, 2026-11-24: there is nothing to go to).
