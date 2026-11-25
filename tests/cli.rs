@@ -1844,3 +1844,524 @@ fn serve_subcommands_explain_themselves() {
         }
     }
 }
+
+const RELEASE_TARGET: &str = if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    "x86_64-pc-windows-msvc"
+} else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+    "aarch64-pc-windows-msvc"
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    "x86_64-apple-darwin"
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    "aarch64-apple-darwin"
+} else if cfg!(target_arch = "aarch64") {
+    "aarch64-unknown-linux-musl"
+} else {
+    "x86_64-unknown-linux-musl"
+};
+
+fn running_version() -> (u64, u64, u64) {
+    let v: Vec<u64> = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .map(|p| p.parse().unwrap())
+        .collect();
+    (v[0], v[1], v[2])
+}
+
+fn newer_version() -> String {
+    let (major, minor, _) = running_version();
+    format!("{major}.{}.0", minor + 1)
+}
+
+fn older_version() -> String {
+    let (major, minor, patch) = running_version();
+    match (minor, patch) {
+        (0, 0) => format!("{}.99.99", major - 1),
+        (m, 0) => format!("{major}.{}.99", m - 1),
+        (m, p) => format!("{major}.{m}.{}", p - 1),
+    }
+}
+
+const NEW_BINARY: &[u8] = b"a stand-in for the released gltree binary";
+
+fn release_archive(scratch: &Path, version: &str) -> (String, Vec<u8>) {
+    let top = format!("gltree-v{version}-{RELEASE_TARGET}");
+    let work = scratch.join("archive");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join(&top)).unwrap();
+    std::fs::write(
+        work.join(&top)
+            .join(format!("gltree{}", std::env::consts::EXE_SUFFIX)),
+        NEW_BINARY,
+    )
+    .unwrap();
+    std::fs::write(work.join(&top).join("README.md"), "readme").unwrap();
+    let name = if cfg!(windows) {
+        format!("{top}.zip")
+    } else {
+        format!("{top}.tar.gz")
+    };
+    let mut tar = Command::new("tar");
+    if cfg!(windows) {
+        tar.args(["-a", "-cf"]);
+    } else {
+        tar.arg("-czf");
+    }
+    assert!(
+        tar.arg(&name)
+            .arg(&top)
+            .current_dir(&work)
+            .status()
+            .unwrap()
+            .success()
+    );
+    (name.clone(), std::fs::read(work.join(&name)).unwrap())
+}
+
+fn sha256_of(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+struct Answer {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+fn ok(body: impl Into<Vec<u8>>) -> Answer {
+    Answer {
+        status: 200,
+        headers: vec![],
+        body: body.into(),
+    }
+}
+
+fn github_stand_in(
+    routes: impl FnOnce(u16) -> Vec<(String, Answer)>,
+) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let routes = routes(port);
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&asked);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            let _ = reader.read_line(&mut first);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let path = first.split(' ').nth(1).unwrap_or("").to_string();
+            kept.lock().unwrap().push(path.clone());
+            let missing = ok("not found");
+            let (status, answer) = match routes.iter().find(|(p, _)| *p == path) {
+                Some((_, a)) => (a.status, a),
+                None => (404, &missing),
+            };
+            let mut head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                answer.body.len()
+            );
+            for (k, v) in &answer.headers {
+                head.push_str(&format!("{k}: {v}\r\n"));
+            }
+            head.push_str("\r\n");
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&answer.body);
+        }
+    });
+    (port, asked)
+}
+
+const LATEST_PATH: &str = "/repos/kihyun1998/gltree/releases/latest";
+
+fn release_stand_in(
+    scratch: &Path,
+    version: &str,
+    sums: impl FnOnce(&str, &[u8]) -> String,
+) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let (name, archive) = release_archive(scratch, version);
+    let listing = sums(&name, &archive);
+    let version = version.to_string();
+    github_stand_in(move |port| {
+        let url = |n: &str| format!("http://127.0.0.1:{port}/download/{n}");
+        let release = serde_json::json!({
+            "tag_name": format!("v{version}"),
+            "assets": [
+                {"name": name, "browser_download_url": url(&name)},
+                {"name": "SHA256SUMS", "browser_download_url": url("SHA256SUMS")},
+            ]
+        });
+        vec![
+            (LATEST_PATH.to_string(), ok(release.to_string())),
+            (format!("/download/{name}"), ok(archive)),
+            ("/download/SHA256SUMS".to_string(), ok(listing)),
+        ]
+    })
+}
+
+fn good_sums(name: &str, archive: &[u8]) -> String {
+    format!(
+        "{}  other.tar.gz\n{}  {name}\n",
+        "0".repeat(64),
+        sha256_of(archive)
+    )
+}
+
+fn binary_copy(dir: &Path, relative: &str) -> (std::path::PathBuf, Vec<u8>) {
+    let path = dir.join(format!("{relative}{}", std::env::consts::EXE_SUFFIX));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_gltree"), &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    (path, bytes)
+}
+
+fn update_with(binary: &Path, port: u16, args: &[&str]) -> (Option<i32>, String, String) {
+    let dir = binary.parent().unwrap();
+    let mut cmd = Command::new(binary);
+    cmd.arg("update")
+        .args(args)
+        .current_dir(dir)
+        .env("GLTREE_GITHUB_API", format!("http://127.0.0.1:{port}"));
+    let out = at_home(&mut cmd, &std::env::temp_dir().join("gltree-no-home"))
+        .output()
+        .unwrap();
+    text_of(&out)
+}
+
+fn left_beside(binary: &Path) -> Vec<String> {
+    let name = binary.file_name().unwrap().to_string_lossy().into_owned();
+    let mut left: Vec<String> = std::fs::read_dir(binary.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&format!("{name}.new")) || *n == format!("{name}.old"))
+        .collect();
+    left.sort();
+    left
+}
+
+fn assert_untouched(binary: &Path, before: &[u8]) {
+    assert!(
+        std::fs::read(binary).unwrap() == before,
+        "{} changed",
+        binary.display()
+    );
+    assert_eq!(left_beside(binary), Vec::<String>::new());
+}
+
+fn refuse_new_files(dir: &Path, refuse: bool) {
+    #[cfg(windows)]
+    {
+        let rule = if refuse { "/deny" } else { "/remove:d" };
+        let grant = if refuse { "*S-1-1-0:(WD)" } else { "*S-1-1-0" };
+        let ran = Command::new("icacls")
+            .arg(dir)
+            .args([rule, grant])
+            .output()
+            .unwrap();
+        assert!(
+            ran.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ran.stdout)
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if refuse { 0o555 } else { 0o755 };
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+}
+
+#[test]
+fn update_installs_a_newer_release_over_the_running_binary() {
+    let dir = outside_a_clone("update-newer");
+    let (binary, _) = binary_copy(&dir, "gltree");
+    let latest = newer_version();
+    let (port, asked) = release_stand_in(&dir, &latest, good_sums);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    let running = env!("CARGO_PKG_VERSION");
+    assert!(
+        out.contains(&format!("{running} -> {latest}")) && out.contains("gltree"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&*binary.file_name().unwrap().to_string_lossy()),
+        "{out}"
+    );
+    assert!(std::fs::read(&binary).unwrap() == NEW_BINARY);
+    assert!(
+        left_beside(&binary).iter().all(|n| !n.contains(".new")),
+        "{:?}",
+        left_beside(&binary)
+    );
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked[0], LATEST_PATH, "{asked:?}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&binary).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+    }
+}
+
+#[test]
+fn update_with_no_newer_release_says_up_to_date_and_leaves_the_binary() {
+    for (name, latest) in [
+        ("update-same", env!("CARGO_PKG_VERSION").to_string()),
+        ("update-older", older_version()),
+    ] {
+        let dir = outside_a_clone(name);
+        let (binary, before) = binary_copy(&dir, "gltree");
+        let (port, asked) = release_stand_in(&dir, &latest, good_sums);
+        let (code, out, err) = update_with(&binary, port, &[]);
+        assert_eq!(code, Some(0), "{name}: {out}{err}");
+        assert_eq!(
+            out,
+            format!(
+                "gltree {} is up to date: the latest release is {latest}\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+            "{name}"
+        );
+        assert_untouched(&binary, &before);
+        assert_eq!(*asked.lock().unwrap(), [LATEST_PATH], "{name}");
+    }
+}
+
+#[test]
+fn update_check_prints_installed_and_latest_and_changes_nothing() {
+    let dir = outside_a_clone("update-check");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let latest = newer_version();
+    let (port, asked) = release_stand_in(&dir, &latest, good_sums);
+    let (code, out, err) = update_with(&binary, port, &["--check"]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(
+        out,
+        format!("installed {}\nlatest {latest}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert_untouched(&binary, &before);
+    assert_eq!(*asked.lock().unwrap(), [LATEST_PATH]);
+}
+
+#[test]
+fn update_refuses_an_archive_that_does_not_match_sha256sums_and_keeps_the_binary() {
+    let wrong = |name: &str, _: &[u8]| format!("{}  {name}\n", "ab".repeat(32));
+    let missing = |_: &str, archive: &[u8]| format!("{}  another.zip\n", sha256_of(archive));
+    let dir = outside_a_clone("update-mismatch");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let (port, _) = release_stand_in(&dir, &newer_version(), wrong);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!((code, out.as_str()), (Some(2), ""), "{err}");
+    assert!(
+        err.contains("does not match SHA256SUMS") && err.contains(RELEASE_TARGET),
+        "{err}"
+    );
+    assert_untouched(&binary, &before);
+
+    let dir = outside_a_clone("update-no-sum");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let (port, _) = release_stand_in(&dir, &newer_version(), missing);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!((code, out.as_str()), (Some(2), ""), "{err}");
+    assert!(
+        err.contains("SHA256SUMS") && err.contains("no line for"),
+        "{err}"
+    );
+    assert_untouched(&binary, &before);
+}
+
+#[test]
+fn update_names_the_address_it_cannot_reach_and_exits_2() {
+    let dir = outside_a_clone("update-unreachable");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!((code, out.as_str()), (Some(2), ""), "{err}");
+    assert!(
+        err.contains(&format!(
+            "cannot reach http://127.0.0.1:{port}{LATEST_PATH}"
+        )),
+        "{err}"
+    );
+    assert_untouched(&binary, &before);
+}
+
+#[test]
+fn update_says_when_the_rate_limit_resets_and_exits_2() {
+    let dir = outside_a_clone("update-rate-limit");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 600;
+    let (port, _) = github_stand_in(|_| {
+        vec![(
+            LATEST_PATH.to_string(),
+            Answer {
+                status: 403,
+                headers: vec![
+                    ("x-ratelimit-remaining".into(), "0".into()),
+                    ("x-ratelimit-reset".into(), reset.to_string()),
+                ],
+                body: br#"{"message": "API rate limit exceeded"}"#.to_vec(),
+            },
+        )]
+    });
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!((code, out.as_str()), (Some(2), ""), "{err}");
+    assert!(
+        err.contains("rate limit") && err.contains("resets in 10 minutes"),
+        "{err}"
+    );
+    assert_untouched(&binary, &before);
+}
+
+#[test]
+fn update_hands_a_managed_install_to_its_manager_unless_forced() {
+    for (name, place, manager, command) in [
+        (
+            "update-scoop",
+            "scoop/apps/gltree/current/gltree",
+            "Scoop",
+            "scoop update gltree",
+        ),
+        (
+            "update-brew",
+            "homebrew/Cellar/gltree/0.1.0/bin/gltree",
+            "Homebrew",
+            "brew upgrade gltree",
+        ),
+        (
+            "update-cargo",
+            "cargo-root/bin/gltree",
+            "cargo",
+            "cargo install --git https://github.com/kihyun1998/gltree --locked --force",
+        ),
+    ] {
+        let dir = outside_a_clone(name);
+        std::fs::create_dir_all(dir.join("cargo-root")).unwrap();
+        std::fs::write(dir.join("cargo-root").join(".crates.toml"), "[v1]\n").unwrap();
+        let (binary, before) = binary_copy(&dir, place);
+        let latest = newer_version();
+        let (port, _) = release_stand_in(&dir, &latest, good_sums);
+        let (code, out, err) = update_with(&binary, port, &[]);
+        assert_eq!(code, Some(0), "{name}: {out}{err}");
+        assert!(
+            out.contains(&format!("installed by {manager}"))
+                && out.contains(&format!("\x60{command}\x60"))
+                && out.contains(&format!("latest release is {latest}")),
+            "{name}: {out}"
+        );
+        assert_untouched(&binary, &before);
+
+        let (code, out, err) = update_with(&binary, port, &["--force"]);
+        assert_eq!(code, Some(0), "{name}: {out}{err}");
+        assert!(
+            out.contains(&format!("{} -> {latest}", env!("CARGO_PKG_VERSION")))
+                && out.contains(&format!(
+                    "{manager} still lists {}",
+                    env!("CARGO_PKG_VERSION")
+                )),
+            "{name}: {out}"
+        );
+        assert!(std::fs::read(&binary).unwrap() == NEW_BINARY, "{name}");
+    }
+}
+
+#[test]
+fn a_plain_bin_folder_is_not_taken_for_cargo() {
+    let dir = outside_a_clone("update-plain-bin");
+    let (binary, _) = binary_copy(&dir, "bin/gltree");
+    let (port, _) = release_stand_in(&dir, &newer_version(), good_sums);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert!(std::fs::read(&binary).unwrap() == NEW_BINARY, "{out}");
+}
+
+#[test]
+fn update_removes_the_binary_an_earlier_update_moved_aside() {
+    let dir = outside_a_clone("update-leftover");
+    let (binary, before) = binary_copy(&dir, "gltree");
+    let name = binary.file_name().unwrap().to_string_lossy().into_owned();
+    let old = binary.with_file_name(format!("{name}.old"));
+    std::fs::write(&old, "the binary before the last update").unwrap();
+    let staged = binary.with_file_name(format!("{name}.new-4242"));
+    std::fs::write(&staged, "half of a replacement").unwrap();
+    let (port, _) = release_stand_in(&dir, env!("CARGO_PKG_VERSION"), good_sums);
+    let (code, _, err) = update_with(&binary, port, &["--check"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(old.exists(), "--check removed {}", old.display());
+    assert!(staged.exists(), "--check removed {}", staged.display());
+    let (code, _, err) = update_with(&binary, port, &[]);
+    assert_eq!(code, Some(0), "{err}");
+    assert_untouched(&binary, &before);
+}
+
+#[test]
+fn a_binary_whose_replacement_cannot_be_written_is_left_as_it_was() {
+    let dir = outside_a_clone("update-unwritable");
+    let (port, _) = release_stand_in(&dir, &newer_version(), good_sums);
+    let place = dir.join("locked");
+    let (binary, before) = binary_copy(&place, "gltree");
+    refuse_new_files(&place, true);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    refuse_new_files(&place, false);
+    assert_eq!((code, out.as_str()), (Some(2), ""), "{err}");
+    assert!(
+        err.contains("cannot write") && err.contains("was left as it was"),
+        "{err}"
+    );
+    assert_untouched(&binary, &before);
+}
+
+#[test]
+fn a_staging_name_an_earlier_run_left_does_not_block_the_update() {
+    let dir = outside_a_clone("update-staging-taken");
+    let (binary, _) = binary_copy(&dir, "gltree");
+    let name = binary.file_name().unwrap().to_string_lossy().into_owned();
+    let taken = binary.with_file_name(format!("{name}.new"));
+    std::fs::create_dir_all(taken.join("in-the-way")).unwrap();
+    let (port, _) = release_stand_in(&dir, &newer_version(), good_sums);
+    let (code, out, err) = update_with(&binary, port, &[]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert!(std::fs::read(&binary).unwrap() == NEW_BINARY, "{out}");
+    assert!(taken.join("in-the-way").is_dir());
+}
+
+#[test]
+fn update_explains_itself_without_a_clone_or_glab() {
+    let long = help_text(&["update", "--help"]);
+    let short = help_text(&["update", "-h"]);
+    for heading in ["Examples:", "Requirements:", "Exit status:", "Output:"] {
+        assert!(
+            long.contains(heading),
+            "update --help lacks {heading}\n{long}"
+        );
+    }
+    for needle in [
+        "gltree update --check",
+        "--force",
+        "SHA256SUMS",
+        "scoop update gltree",
+    ] {
+        assert!(long.contains(needle), "{needle}\n{long}");
+    }
+    assert_eq!(help_text(&["help", "update"]), long);
+    assert!(!short.contains("Examples:"), "{short}");
+}

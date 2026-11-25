@@ -26,6 +26,7 @@ A linked note graph of what gltree does. It answers two questions before a chang
 - [Reading the repo config](reading-the-repo-config.md)
 - [The command-line contract](the-command-line-contract.md)
 - [Shipping a release](shipping-a-release.md)
+- [Updating gltree](updating-gltree.md)
 
 ## Invariants
 - [Every reference has a link, and every link has a reference](every-reference-has-a-link.md)
@@ -55,6 +56,6 @@ absent note means nothing does.
 ## The shape
 A pure core — the header, the derived lists, check, tree, roots, migrate, show — works on `Item`
 values behind one port (`Tracker`), with three adapters: the GitLab server, a snapshot file, and an
-in-memory fake for tests. `src/main.rs` reads the repo config once and dispatches, except for `serve`, which reads the config of each repo it shows; `src/serve.rs` serves a local page and a JSON API over the same core, for the clone it runs in or for every repo registered in `~/.gltree/repos.toml` (`src/repos.rs`). The largest gap:
+in-memory fake for tests. `src/main.rs` reads the repo config once and dispatches, except for `serve`, which reads the config of each repo it shows, and `update`, which reads GitHub's latest release and replaces the running binary (`src/update.rs`); `src/serve.rs` serves a local page and a JSON API over the same core, for the clone it runs in or for every repo registered in `~/.gltree/repos.toml` (`src/repos.rs`). The largest gap:
 callers outside the repository read its JSON and flags, and nothing in the repository checks those
 fields against what they read.

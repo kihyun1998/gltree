@@ -19,4 +19,5 @@ pub mod show;
 pub mod snapshot;
 pub mod tracker;
 pub mod tree;
+pub mod update;
 pub mod write;

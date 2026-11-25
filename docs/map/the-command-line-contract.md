@@ -24,16 +24,22 @@ implementation, which is why its output is what callers read; it does not decide
   `http://127.0.0.1:<port>/` before its first full read, which runs in the background; what stops it
   with exit 2 before the address, and why a failed first read does not, and its six routes and their
   JSON are in [serving-the-viewer](serving-the-viewer.md).
-- **`serve` is the one command that can run outside a clone on purpose** (#45, maintainer,
-  2026-11-24): with repos registered in `~/.gltree/repos.toml` it shows each of them wherever it
+- **`serve` and `update` are the commands that can run outside a clone on purpose** (`serve`: #45,
+  maintainer, 2026-11-24; `update`: #44): with repos registered in `~/.gltree/repos.toml` it shows each of them wherever it
   runs, and `serve add PATH [--name N]`, `serve list` and `serve remove N` keep that list and run
   anywhere. They are subcommands of `serve` (`ServeList`, `args_conflicts_with_subcommands`, so
   `serve list --port 1` is a usage error), and `gltree serve` with no subcommand still runs the
   server, with no `serve run`. Every other command takes its tracker from the clone it runs in, as
-  before: `run` dispatches `serve` to `serve_command` and the rest, a flattened `InClone`, to
-  `run_in_clone`, which reads the repo config of the folder it runs in once, before the command.
+  before: `run` dispatches `serve` to `serve_command`, `update` to `update::update`, and the rest, a
+  flattened `InClone`, to `run_in_clone`, which reads the repo config of the folder it runs in once, before the command.
   `serve add` prints `registered NAME: PATH`, `serve list` one `NAME  PATH` line per repo and nothing
   for none, `serve remove` `removed NAME: PATH`; each exits 2 with the reason on a refusal.
+- **`update`** reads GitHub, never GitLab, and prints text only, no JSON: `--check` prints
+  `installed X` and `latest Y`; otherwise `gltree X is up to date: the latest release is Y`,
+  `updated gltree X -> Y: PATH` (followed by a line saying the manager still lists X, after
+  `--force` on a managed binary), or, for a managed binary, where it is and the manager's command.
+  It exits 0 for each of these and 2 on any error; `--force` beside `--check` is a usage error. The
+  rest is in [updating-gltree](updating-gltree.md).
 - **Item numbers** are accepted as `N` or `#N` (`parse_iid`).
 - **The help is the first-time user's manual** (#34): `-h` gives each command's one-line `about` and
   every option's short `help`; `--help` adds the `long_about`, each option's `long_help` where the
@@ -41,7 +47,7 @@ implementation, which is why its output is what callers read; it does not decide
   status. The Requirements and Exit status paragraphs are `macro_rules!` literals in `main.rs`
   (`requires_clone`, `reads_a_snapshot`, `reads_the_whole_tracker`, `writes_need_the_config`,
   `reads_the_config`, `exit_status`, `exit_status_of_a_write`), since `concat!` takes literals
-  only; `check` and `serve` state their own exit status, and a few command-specific lines sit beside
+  only; `check`, `serve` and `update` state their own exit status, and a few command-specific lines sit beside
   the macros. `exit_status_of_a_write` goes on the commands that return `Error::Unfinished`
   (`new`, `edit`, `move`, `migrate`), not on `sync`, whose failed write is a plain error.
   clap here has no `wrap_help` feature, so every rendered help line but an example is kept within
@@ -65,7 +71,7 @@ implementation, which is why its output is what callers read; it does not decide
   `edit --set-extra`.
 
 ## Code
-- `src/main.rs — Cli, Command, InClone, ServeList, parse_iid, parse_extra, unreadable_dir, current_dir, server, server_in, source, main, run, run_in_clone, serve_command`
+- `src/main.rs — Cli, Command, InClone, ServeList, parse_iid, parse_extra, unreadable_dir, current_dir, server, server_in, source, main, run, run_in_clone, serve_command, Command::Update`
 - `src/main.rs — tests::every_command_explains_itself_with_examples_that_parse, tests::every_help_line_but_an_example_fits_80_columns, tests::the_usage_line_names_gltree_on_every_platform`
 - `tests/cli.rs`
 - `README.md` (the user-facing shapes)
@@ -83,6 +89,7 @@ implementation, which is why its output is what callers read; it does not decide
 - [reading-the-repo-config](reading-the-repo-config.md) — a config key added means consumers raise their minimum version.
 - [serving-the-viewer](serving-the-viewer.md) — the API's JSON is part of the contract: `/api/families` embeds `tree --all --json`.
 - [shipping-a-release](shipping-a-release.md) — a changed shape reaches callers only through a release, and the version they install.
+- [updating-gltree](updating-gltree.md) — `update`'s text and exit status.
 
 ## Known holes / open
 - Shapes are tested (`show_as_json_carries_the_same_fields` in `tests/cli.rs`; `json_carries_from_and_extra_and_the_first_line_after_the_header` in `src/roots.rs`), but a test is edited along with a rename: nothing here marks which fields are read outside, besides this note.

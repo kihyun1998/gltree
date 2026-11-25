@@ -46,6 +46,7 @@ already says the server refused (`answer`, tested with a 502 HTML body).
 - [the-command-line-contract](the-command-line-contract.md) — `current_dir` in `src/main.rs`: `cannot read the current directory: …`, for `server` and `run`.
 - [migrating-a-tracker](migrating-a-tracker.md) — `plan`: `#N's description is malformed: …` when `header::with_header` refuses the body under an old head.
 - [reading-the-repo-config](reading-the-repo-config.md) — the config has its own `config::Error`, printed `.gltree.toml: <reason>`.
+- [updating-gltree](updating-gltree.md) — `update::Error`, its own type since GitHub is a source outside the tracker: `cannot reach <address>: …`, `<address> answered HTTP <status>`, `the release answer from <address> is malformed: …`, `SHA256SUMS of <tag> has no line for <archive>`, `<archive> does not match SHA256SUMS of <tag>`, `tar could not unpack <archive>: …`, `cannot write <path>: …`.
 
 ## What a violation looks like
 `gltree: not a tracker snapshot: glab config: …` from a command given no snapshot; a malformed server

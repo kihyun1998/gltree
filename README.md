@@ -50,6 +50,31 @@ scoop install gltree
 Or an archive from the [releases](https://github.com/kihyun1998/gltree/releases) (Linux musl,
 macOS, Windows; x64 and arm64), or from source: `cargo install --git https://github.com/kihyun1998/gltree --locked`.
 
+## Update
+
+```sh
+gltree update            # install the latest release when it is newer
+gltree update --check    # print the installed and the latest version
+gltree update --force    # replace a binary Scoop, Homebrew or cargo installed
+```
+
+`gltree update` asks GitHub for gltree's latest release and, when it is newer than the running
+binary, downloads this platform's archive, checks it against the release's `SHA256SUMS`, unpacks it
+with the system's `tar` and puts the new binary in place of the running one. A failed download, a
+checksum that does not match or a replacement that fails leaves the running binary as it was, and a
+release that is not newer is never installed. It needs no clone, login or repo config, and asks
+GitHub without a token, so GitHub's limit of 60 requests an hour per address applies; an error says
+when the limit resets. On Linux the static musl archive replaces the binary whichever C library it
+was built against. On Windows the old binary is renamed `gltree.exe.old` beside the new one and
+removed by the next `gltree update`.
+
+A binary installed by Scoop (under `apps/gltree/`), Homebrew (under `Cellar/gltree/`) or cargo (in a
+`bin` folder beside cargo's `.crates.toml`) is left to its manager: `gltree update` names the latest
+release and the manager's command (`scoop update gltree`, `brew upgrade gltree`, or
+`cargo install --git https://github.com/kihyun1998/gltree --locked --force`) and changes nothing.
+`--force` replaces it in place anyway, for when the bucket or tap has not picked the release up
+yet; the manager then lists the old version until its own next update.
+
 ## Use
 
 Inside a clone of the tracker's project:

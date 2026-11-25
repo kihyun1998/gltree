@@ -14,6 +14,7 @@ use gltree::show;
 use gltree::snapshot::SnapshotFile;
 use gltree::tracker::{Error as TrackerError, Tracker};
 use gltree::tree;
+use gltree::update;
 use gltree::write;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -99,12 +100,13 @@ everything under it is a family.
 It reads the trees (tree, roots, show, check, serve), saves the tracker to a
 file to read offline (snapshot), and changes it with each header, the links
 between items and the lists on the other ends kept in step (new, edit, move,
-sync, migrate). Item numbers are written N or #N; quote #N in a shell, where #
-starts a comment.",
+sync, migrate). `gltree update` installs gltree's latest release. Item numbers
+are written N or #N; quote #N in a shell, where # starts a comment.",
     after_help = "Run `gltree <command> --help` for a command's examples, requirements and output.",
     after_long_help = concat!(
         requires_clone!(),
-        "  `gltree serve` with repos registered by `gltree serve add` runs anywhere.
+        "  `gltree serve` with repos registered by `gltree serve add` runs anywhere,
+  and so does `gltree update`.
 ",
         "  tree, roots, check, show, migrate and serve take --snapshot FILE, a copy
   saved by `gltree snapshot`, and then need no login or server.
@@ -208,6 +210,56 @@ of the server, leaving the repo list out; the refresh button reads
 the file again"
         )]
         snapshot: Option<PathBuf>,
+    },
+    #[command(
+        about = "Install gltree's latest release over the running binary",
+        long_about = "Asks GitHub for gltree's latest release. When it is newer than the running
+binary, downloads the archive for this platform, checks it against the
+release's SHA256SUMS and puts the new binary in place of the running one. A
+failed download, a checksum that does not match or a replacement that fails
+leaves the running binary as it was. A release that is not newer is never
+installed. --check only prints the installed and the latest version.
+
+A binary that Scoop, Homebrew or cargo installed is left to that manager: the
+command names the latest release and the manager's own command, and changes
+nothing. --force replaces it here anyway; the manager then lists the old
+version until its own next update.",
+        after_long_help = concat!(
+            "Examples:
+  gltree update             # install the latest release when it is newer
+  gltree update --check     # print the installed and the latest version
+  gltree update --force     # replace a binary Scoop, Homebrew or cargo installed
+
+Output:
+  Text. --check prints `installed X.Y.Z` and `latest X.Y.Z`. Otherwise one of:
+  `gltree X is up to date: the latest release is Y`; `updated gltree X -> Y:
+  PATH`, with a line saying the manager still lists X when --force replaced a
+  managed binary; or, for a managed binary, where it is, the latest release
+  and the manager's command (`scoop update gltree`, `brew upgrade gltree`,
+  `cargo install --git https://github.com/kihyun1998/gltree --locked --force`).
+
+Requirements:
+  None of a clone, a login or a repo config: it runs anywhere. It reads
+  GitHub's releases of kihyun1998/gltree without a token, within GitHub's
+  limit of 60 requests an hour per address, and unpacks the archive with the
+  system's `tar`. Replacing the binary needs write access to its folder.
+",
+            "
+Exit status:
+  0 when it installed the release, found nothing newer, or left a managed
+  binary to its manager; 2 when GitHub cannot be reached or its rate limit is
+  used up, the release has no archive for this platform or no SHA256SUMS line
+  for it, the archive does not match, or the binary cannot be replaced, with
+  the reason on stderr."
+        )
+    )]
+    Update {
+        /// Only print the installed and the latest version
+        #[arg(long)]
+        check: bool,
+        /// Replace a binary a package manager installed
+        #[arg(long, conflicts_with = "check")]
+        force: bool,
     },
 }
 
@@ -1085,6 +1137,14 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             port,
             snapshot,
         } => serve_command(list, port, snapshot),
+        Command::Update { check, force } => {
+            let report = update::update(check, force)?;
+            let mut out = std::io::stdout().lock();
+            for line in update::render(&report) {
+                writeln!(out, "{line}")?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::InClone(command) => run_in_clone(command),
     }
 }
