@@ -29,6 +29,9 @@ pub struct Comment {
     pub body: String,
     /// Visible to project members only.
     pub internal: bool,
+    /// The body as the server renders it to HTML; `None` when the read did not ask for it.
+    #[serde(skip)]
+    pub body_html: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -54,6 +57,9 @@ pub struct Item {
     /// Oldest first; `None` when the source did not record comments at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comments: Option<Vec<Comment>>,
+    /// The description as the server renders it to HTML; `None` when the read did not ask for it.
+    #[serde(skip)]
+    pub desc_html: Option<String>,
 }
 
 fn issue() -> String {
@@ -73,10 +79,37 @@ impl Item {
             closed_at: None,
             url: None,
             comments: None,
+            desc_html: None,
         }
     }
 
     pub fn link_ends(&self) -> &[u64] {
         self.links.as_deref().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rendered_html_is_never_written_out_nor_read_back() {
+        let mut item = Item::new(1, State::Open, "t", "body");
+        item.desc_html = Some("<p>body</p>".into());
+        item.comments = Some(vec![Comment {
+            author: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            body: "c".into(),
+            internal: false,
+            body_html: Some("<p>c</p>".into()),
+        }]);
+        let text = serde_json::to_string(&item).unwrap();
+        assert!(!text.contains("html") && !text.contains("<p>"), "{text}");
+        let back: Item = serde_json::from_str(
+            r#"{"iid":1,"title":"t","state":"open","desc_html":"<p>x</p>","comments":[{"created_at":"x","body":"c","internal":false,"body_html":"<p>c</p>"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(back.desc_html, None);
+        assert_eq!(back.comments.unwrap()[0].body_html, None);
     }
 }

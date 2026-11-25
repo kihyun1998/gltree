@@ -3,7 +3,8 @@
 ## What it is
 `gltree serve`: a local web server on 127.0.0.1 that serves one page embedded in the binary and a
 small JSON API over the tracker — the families on the left, the selected family's tree on the right,
-every node linked to the server, a refresh button, and the badges a repo names in its config. It
+a refresh button, the badges a repo names in its config, a search over every item, and an issue view
+that reads one item's body and comments. It
 shows the tracker of the clone it runs in, or, once repos are registered in `~/.gltree/repos.toml`,
 every registered repo behind a row of tabs.
 
@@ -13,8 +14,8 @@ reasons below.
 
 ## Design model
 - **Read only.** The server calls only the tracker port's reads: `all_items` through `tree::tree`,
-  and `level` through `tree::live_tree` (`Repo::read_all`, `Repo::tree_of`). Nothing on the page
-  writes (issue #27, out of scope).
+  `level` through `tree::live_tree` (`Repo::read_all`, `Repo::tree_of`), and `item_rendered` for
+  `/api/item/N` (`Repo::item_of`). Nothing on the page writes (issue #27, out of scope).
 - **The repo list** (issue #45, maintainer, 2026-11-24). `~/.gltree/repos.toml` holds `[[repo]]`
   entries, each a `name` and the absolute `path` of a clone, in the order they were registered
   (`repos::RepoList`); the home folder is `std::env::home_dir`, which reads `USERPROFILE` first on
@@ -79,7 +80,9 @@ reasons below.
   discarded; every answer closes the connection (`answer`, `parse_head`, `write`). HEAD answers as
   GET without the body, and a 405 names its `Allow` (RFC 9110). A failed accept waits 100 ms before the
   next, so a lasting error (no file handles left) does not spin a core. A judgement over a small server
-  crate (reading, 2026-11-19): the five routes need no more.
+  crate (reading, 2026-11-19): the six routes need no more. `/api/tree/N` and `/api/item/N` share
+  one branch of `App::handle` (`ReadOne`), so a number that does not parse, a method other than GET
+  or HEAD, `?repo=` and the 404 / 502 split are the same for both.
 - **The address comes first, the first read after it** (issue #35, confirmed with the maintainer,
   2026-11-23; it reverses #27's "the first full read happens at start, before the address is printed",
   maintainer, 2026-11-20). On a tracker of 2,803 items on a self-hosted CE the old order showed nothing
@@ -119,11 +122,14 @@ reasons below.
   the server looks it up among the registered names and opens only the clone path the list holds.
 - **JSON**: `/api/repos`, `/api/families` and errors carry `serve::JSON_VERSION` 4 (3 before #47, 2 before #45) —
   `{version, repos: [{name, state, error, read_at, families, open}]}`, `{version, repo, state, error,
-  read_at, badges, tree}` and `{version, error}`; `repos` is the registered repos in the order they
+  read_at, badges, tree}`, `/api/item/N`'s `{version, number, title, state, labels, url, body, body_html,
+  comments: [{author, created_at, internal, body, body_html}]}` and `{version, error}`; `/api/item/N`
+  came with #48 at version 4, since adding an endpoint changes no existing shape, and its `comments`
+  is `null` where the source did not record them ([not-recorded-is-not-none](not-recorded-is-not-none.md)); `repos` is the registered repos in the order they
   were registered, empty with none registered or with `--snapshot`, and `families` and `open` count
   the kept read's families and open items, counted once when the read ends (`open_items`), `null`
   until one has; `repo` is the repo's name, `null` for the clone it runs in. With repos registered,
-  `/api/families`, `/api/refresh` and `/api/tree/N` name one with `?repo=NAME` (`App::repo`): none or
+  `/api/families`, `/api/refresh`, `/api/tree/N` and `/api/item/N` name one with `?repo=NAME` (`App::repo`): none or
   `repo` given twice is 400, a name not registered 404; with none registered, a `repo` is 404, so a
   caller asking for a repo never gets the clone's tracker in its place. The query is kept apart from
   the path by `parse_head` and read as `&`-separated pairs, no percent-decoding; `tree` and `/api/tree/N` are
@@ -197,6 +203,69 @@ reasons below.
   detail's title when the target is the family's root, is focused once, scrolled into view and
   marked with `hit` for 1.6 s (`aimAt`), the mark put back on each redraw within that time. The
   title is a counterpart of its own in `hold`, so a redraw keeps focus on it (#47's spec review).
+- **Search** (#48: the maintainer picked variant A of two, run on a real self-hosted tracker,
+  2026-11-25). A box in the top bar, "Search # or title", searches the kept full read of the repo
+  shown (`index`, the one index of every item under every root that `where` reads too, finished families included, built once
+  per full read, each item with its root and the numbers above it; an item reached from two roots is
+  listed under the first). A query that is a number, with or without `#`, lists
+  that item and the items whose number starts with it, lowest first, at most 10; since every number
+  starting with N is at least N, the exact item comes first (`search`; the issue says "a few", 10 and
+  the order are the worker's judgement, 2026-11-25). Any other query lists the titles holding every
+  word, lowercased (`toLowerCase`) on both sides, open before closed and then highest number first,
+  at most 30, each word marked in the title with `mark` when lowercasing keeps the title's length,
+  and nothing marked otherwise (`lit`). A result row is the item's mark, number, title and its place:
+  `family` for a root, `in #R › #P` for an item under one (`hitRow`). Choosing one, by Enter, which
+  takes the highlighted row (the first until an arrow moves it), or by a click, goes there as a
+  relations row does (`jump`, which closes the view first, then `land`); the arrows move through the
+  rows (`aria-activedescendant` on the box, a `combobox` with a `listbox`), and Escape closes them
+  and keeps the text, so an arrow opens them again (worker's judgement, 2026-11-25; a `search`
+  input clears itself on Escape unless the key is taken). Leaving the box closes them. With no kept
+  read the placeholder and the one row say "Waiting for the full read…"; a tab switch puts it back
+  until that repo is read, and a full read that lands while the rows are open runs the query again.
+- **The issue view** (#48: the maintainer picked variant 1 of three, 2026-11-25). "View issue" in the
+  detail's head, or a tree row, opens an item in the detail pane, replacing its contents in place
+  (`openItem`, `putView`): "← Back to the tree", "Open in GitLab", the mark, number, state and
+  `in #R` for an item under the root, the title, the labels, then the body and the comments. The head
+  is drawn at once from the drawn tree, with "Reading #N from GitLab…" under it, and redrawn from
+  `GET /api/item/N` when it answers; a failure shows "Cannot read #N: " and the server's message, with
+  "Open in GitLab" still in the head. The item is read on every open and nothing is kept
+  (`itemWant` drops an answer that arrives after the view closed or another opened). A tree row is
+  entered as variant 3 of the prototype showed: every row ends in a `›`, `--faint`, `--accent` while
+  the row is hovered, with no transition; a plain click opens the view, and a click with Ctrl, Cmd,
+  Shift or Alt, or the middle button (`auxclick`), keeps the row's own link to GitLab in a new tab.
+  A row whose item has no `http:` or `https:` URL is a button, so it opens the view too. While the view
+  is open, `draw` only records the tree it was given (`last`): a walk, the "Show done items" switch
+  and a refresh leave the view, and "← Back" draws `last`, so it shows the newest tree with the folds
+  and the switch as they now are, at the scroll the tree had when the view opened, with no ring fill
+  (`restore`). A refresh that keeps the family selected keeps the view (`choose`); selecting a family,
+  the selected one included, which shows its tree at once, choosing a search result, and a tab
+  switch close it (`closeView`). Opening moves focus to "← Back"; Back puts it on the row that opened
+  it, or on "View issue", and on the detail when that row is gone. A redraw keeps focus on both by
+  the keys *Focus survives a redraw* lists.
+- **Cleaning GitLab's HTML** (#48). GitLab's GraphQL gives the rendered HTML of a description
+  (`WorkItemWidgetDescription.descriptionHtml`) and of a comment (`Note.bodyHtml`), both measured
+  present on a self-hosted GitLab by the conductor, a body of about 22,000 characters rendered with its
+  table (2026-11-25), so the page needs no Markdown renderer (maintainer, 2026-11-25, over a
+  hand-written renderer and a vendored library). The page never inserts it as it came: `clean` parses
+  it with `DOMParser`, which runs no script and loads nothing, and rebuilds it element by element
+  (`put`): an allow-listed tag (`KEEP`) is made anew with no attribute but `colspan` and `rowspan` up
+  to three digits, a `text-align` of left, center or right on a cell, `start` on a list and `open` on
+  `details`; a link keeps only an `http:` or `https:` `href`, resolved against the item's URL (`safeUrl` with a base),
+  and opens in a new tab with `noopener noreferrer`, a link inside a link is left as its text, and a
+  link with no text is dropped: GitLab puts an empty `a.anchor` in every heading (8 in one body on
+  the self-hosted server, conductor, 2026-11-25), which would otherwise be an unnamed link; a
+  checkbox becomes a disabled one; an image becomes a link to its `data-src` or `src` named "Image: "
+  and its alt, or that text alone inside a link, since GitLab's uploads need a sign-in and the CSP
+  allows only `data:` images; `DROP` (`script`, `style`, `iframe`, `svg`, `math`, form controls and
+  the like) goes with its contents; any other tag is dropped and its children kept. No `id`, `class`,
+  `style` or event attribute survives, so a body cannot pose as the page's own `#vb` or a `data-n` row.
+  GitLab renders the TOML header as a code block marked `data-lang-params="frontmatter"`, the first
+  element of the description, in a `div.markdown-code-block` (conductor, live self-hosted GitLab,
+  2026-11-25); `clean` drops that block when it is the first element, and leaves a later one, which a
+  person wrote. A snapshot keeps no HTML (`Item::desc_html` and `Comment::body_html` are never
+  written or read, `#[serde(skip)]`), so `body_html` is `null` and the page shows the Markdown as
+  escaped text with its line breaks, the header cut as `header::parse` cuts it (`unfence`); comments
+  not recorded say "Comments not recorded; take a fresh snapshot", as `gltree show` does.
 - **Repo tabs** (#45: the maintainer picked variant A of three, run on a real tracker of about 630
   families plus two synthetic repos, 2026-11-24). With repos registered, a row of tabs above the hero
   (`#tabs`, a `nav` of buttons) names each repo in the order `/api/repos` gives, with its open items
@@ -304,7 +373,7 @@ reasons below.
   afterwards focus its counterpart in what was drawn (`go`), by a key that survives the redraw: a
   family row by its number (`data-s`), a tree row by its item number (`data-n`), a fold row by its
   parent's number (`data-u`), a relations-box row by its group, source and target (`data-j`), a
-  group's `N more` by its group (`data-g`), "Open in GitLab" by its class, and the detail itself by its id. Keys
+  group's `N more` by its group (`data-g`), "Open in GitLab" and "View issue" by their class, the issue view's "← Back" (`#vb`) and the detail itself by their id. Keys
   are compared as strings against `dataset`, never put into a selector, so a number the tracker
   sends cannot change what is looked up; the search covers only `#rows` and `#det`, which a fading
   ghost no longer carries as its id. Where the counterpart is gone, focus goes to a fallback (worker's
@@ -313,7 +382,7 @@ reasons below.
   the detail of a family still selected falls to the tree row now at the position it had, the last
   row when the tree got shorter. Everything else falls to the detail: the family gone, the tree
   empty, or "Open in GitLab" or the detail itself with nothing in its place.
-  A target that cannot take focus (a tree row with no link, the detail) gets `tabIndex` -1 for as
+  A target that cannot take focus (the detail) gets `tabIndex` -1 for as
   long as it holds focus, and loses it on blur: `draw` keeps the detail element, and a detail left
   at -1 would lose the Tab stop Chromium gives a scroll container once it grows long enough to scroll.
   Focus is moved with `preventScroll`, so the detail keeps the scroll `paint` gives it back; a
@@ -349,7 +418,8 @@ reasons below.
   busy, so a refresh clicked then starts a second chain (see Known holes).
 - **Every value the page renders is escaped** (`esc`: `& < > " '`) and **a link is made only from an
   `http:` or `https:` URL** (`safeUrl`); any other `url`, `null` included, renders the node
-  without a link. `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them
+  as a button with no link. The one exception is the HTML GitLab renders for a body or a comment,
+  which the page rebuilds through an allow-list instead (*Cleaning GitLab's HTML*, below). `tree --json` passes `url`, labels and `[extra]` through as the tracker holds them
   (#26's review, comment on #27), so the page is where they meet HTML.
 - **Badges** come from the repo config ([reading-the-repo-config](reading-the-repo-config.md)) and
   apply to roots only: the first label starting with `prefix` gives the value (the label's rest); a
@@ -357,7 +427,9 @@ reasons below.
   keeps [listing-roots](listing-roots.md)' boundary: label meanings are the caller's.
 
 ## Code
-- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, Configure, Repo, Repo::named, App, Kept, Kept::new, Done, App::new, App::registered, App::start, App::repos_json, App::repo, Repo::refresh, Repo::begin, Repo::finish, Repo::read_all, Repo::families, Repo::summary, Repo::tree_of, open_items, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/serve.rs — JSON_VERSION, DEFAULT_PORT, PAGE, Open, Configure, Repo, Repo::named, App, Kept, Kept::new, Done, App::new, App::registered, App::start, App::repos_json, App::repo, Repo::refresh, Repo::begin, Repo::finish, Repo::read_all, Repo::families, Repo::summary, Repo::tree_of, Repo::item_of, ReadOne, open_items, App::ours, App::handle, Request, Head, Status, Response, utc, bind, serve, answer, parse_head, write`
+- `src/item.rs — Item::desc_html, Comment::body_html` (never written to a snapshot or `show --json`)
+- `src/tracker.rs — Tracker::item_rendered` (a source that renders nothing answers `item_with_comments`)
 - `src/repos.rs — Repo, RepoList, RepoList::file_in, RepoList::load, RepoList::add, RepoList::remove, RepoList::save, name_error, clone_at, default_name`
 - `src/snapshot.rs — SnapshotFile::open` (the check before the address, a directory refused)
 - `src/config.rs — Badge` (serialised as it is into `/api/families`' `badges`)
@@ -392,6 +464,32 @@ reasons below.
   Three mutations were each seen failing their check: no `gen` guard in `ask`, no `replaceState`, and
   the tab row rebuilt on every update. The stand-in answered a walk with the page shape, so a walked
   tree drew the stale note; the walk itself is #30's, unchanged here.
+- #48's search and issue view were checked in headless Edge 158 over CDP at 1440×900, with a stubbed
+  `fetch` that can hold any answer, against a tree of five families (one of 44 items with a fold, a
+  finished one, numbers 12, 120, 123 and 1200, an XSS title) and item answers that include a body
+  holding a frontmatter block, a table, task lists, a `javascript:` link, relative links, GitLab's
+  lazy image markup, `script`, `iframe`, `style`, `svg`, a form, `onerror`/`onclick` and an `id="vb"`
+  (2026-11-25); the page was opened from a file, so no CSP stood behind the cleaner. 44 checks: the
+  number and word orders, the marks and the path, no match, the arrows, Enter and Escape, a child, a
+  folded item and a finished family reached, a root's title marked, the waiting box and its return on
+  a tab switch, the search kept to the tab shown and rebuilt after a switch; every row's `›`, its
+  hover colour, a row with no link as a button, "View issue" beside "Open in GitLab", Ctrl, Shift and
+  middle clicks keeping the link; the loading state and focus on Back, the rendered body, the header
+  block gone and a later one kept, a heading anchor leaving no empty link, nothing hostile left (no script ran, no element or attribute
+  outside the list), links and images, Back with the scroll, folds and focus, "View issue" and focus,
+  the failure, a snapshot's plain text, unrecorded comments, an answer after Back dropped, a refresh
+  and a walk while the view is open, the "Show done items" switch under it, focus on "View issue"
+  through a refresh, the relations box's go-to after it was split into `land`, and the view closed by
+  another family, the same family, a search result and a tab switch, `?repo=` on the item call.
+  48 mutations of the page each failed the check named for them (42, then 6 more after the review's
+  fixes); four first survived, each a check
+  whose state never occurred (the switch with every fold already open, a walk equal to the drawn tree,
+  a tab switch between families of different numbers, Escape cleared by the input itself), and the
+  checks were changed until each failed. Against the real binary serving the fixture snapshot with
+  its CSP, a row opened the view and the search listed results with no console message. GitLab's
+  markup for an uploaded image (`data-src` on a lazy `img` inside a link) was written from memory and
+  not read from a real answer. The rendered query fits the real server's complexity cap
+  ([reading-the-server](reading-the-server.md)).
 - #47's box was checked in headless Edge over CDP at 1440×900 with a stubbed `fetch` serving ten
   families, one with relations from its root and two items, an XSS title among the targets, a
   finished family and folded done items (2026-11-24): the three groups and their labels, 5 rows and

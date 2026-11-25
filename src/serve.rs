@@ -60,6 +60,8 @@ impl Kept {
     }
 }
 
+type ReadOne = fn(&Repo, u64) -> Result<Value, Error>;
+
 struct Done {
     at: String,
     tree: Value,
@@ -267,6 +269,34 @@ impl Repo {
         };
         Ok(tree::to_json(&nodes))
     }
+
+    fn item_of(&self, n: u64) -> Result<Value, Error> {
+        let item = (self.open)()?.item_rendered(n)?;
+        let comments = item.comments.as_ref().map(|cs| {
+            cs.iter()
+                .map(|c| {
+                    json!({
+                        "author": c.author,
+                        "created_at": c.created_at,
+                        "internal": c.internal,
+                        "body": c.body,
+                        "body_html": c.body_html,
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        Ok(json!({
+            "version": JSON_VERSION,
+            "number": item.iid,
+            "title": item.title,
+            "state": item.state.as_str(),
+            "labels": item.labels,
+            "url": item.url,
+            "body": item.desc,
+            "body_html": item.desc_html,
+            "comments": comments,
+        }))
+    }
 }
 
 fn open_items(node: &Value) -> usize {
@@ -417,18 +447,26 @@ impl App {
             }),
             "/" | "/api/repos" | "/api/families" => method_not_allowed(READ),
             "/api/refresh" => method_not_allowed("POST"),
-            path => match path.strip_prefix("/api/tree/") {
-                None => error(Status::NotFound, "no such page"),
-                Some(_) if !get => method_not_allowed(READ),
-                Some(n) => match n.parse() {
+            path => {
+                let (n, read): (&str, ReadOne) = if let Some(n) = path.strip_prefix("/api/tree/") {
+                    (n, Repo::tree_of)
+                } else if let Some(n) = path.strip_prefix("/api/item/") {
+                    (n, Repo::item_of)
+                } else {
+                    return error(Status::NotFound, "no such page");
+                };
+                if !get {
+                    return method_not_allowed(READ);
+                }
+                match n.parse() {
                     Err(_) => error(Status::NotFound, "not an item number"),
-                    Ok(n) => on(&|r| match r.tree_of(n) {
+                    Ok(n) => on(&|r| match read(r, n) {
                         Ok(v) => ok(&v),
                         Err(e @ Error::NotFound(_)) => error(Status::NotFound, &e.to_string()),
                         Err(e) => error(Status::BadGateway, &e.to_string()),
                     }),
-                },
-            },
+                }
+            }
         }
     }
 }
@@ -703,6 +741,117 @@ mod tests {
         );
     }
 
+    fn rendered_items() -> Vec<Item> {
+        let mut all = items();
+        let child = &mut all[1];
+        child.url = Some("https://gitlab.example.com/team/app/-/issues/2".into());
+        child.labels = vec!["bug".into()];
+        child.desc_html = Some("<p>child body</p>".into());
+        child.comments = Some(vec![
+            crate::item::Comment {
+                author: Some("mina".into()),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                body: "first".into(),
+                internal: false,
+                body_html: Some("<p>first</p>".into()),
+            },
+            crate::item::Comment {
+                author: None,
+                created_at: "2026-01-02T00:00:00Z".into(),
+                body: "second".into(),
+                internal: true,
+                body_html: None,
+            },
+        ]);
+        all
+    }
+
+    #[test]
+    fn an_item_is_read_fresh_with_its_html_and_comments_and_an_unknown_number_is_404() {
+        let held = Arc::new(Mutex::new(rendered_items()));
+        let a = app(Arc::clone(&held));
+        let r = a.handle(&get("GET", "/api/item/2"));
+        assert_eq!((r.status, r.content_type), (Status::Ok, "application/json"));
+        assert_eq!(
+            body(&r),
+            json!({
+                "version": 4, "number": 2, "title": "child", "state": "closed",
+                "labels": ["bug"], "url": "https://gitlab.example.com/team/app/-/issues/2",
+                "body": "+++\nparent = 1\n+++\n", "body_html": "<p>child body</p>",
+                "comments": [
+                    {"author": "mina", "created_at": "2026-01-01T00:00:00Z", "internal": false,
+                     "body": "first", "body_html": "<p>first</p>"},
+                    {"author": null, "created_at": "2026-01-02T00:00:00Z", "internal": true,
+                     "body": "second", "body_html": null},
+                ],
+            })
+        );
+        held.lock().unwrap()[1].title = "renamed".into();
+        assert_eq!(
+            body(&a.handle(&get("GET", "/api/item/2")))["title"],
+            "renamed"
+        );
+        for path in ["/api/item/42", "/api/item/x", "/api/item/"] {
+            let r = a.handle(&get("GET", path));
+            assert_eq!(r.status, Status::NotFound, "{path}");
+            assert!(body(&r)["error"].is_string(), "{path}");
+        }
+    }
+
+    #[test]
+    fn an_item_from_a_source_with_no_html_has_null_html_and_unrecorded_comments_are_null() {
+        let a = app(Arc::new(Mutex::new(items())));
+        let v = body(&a.handle(&get("GET", "/api/item/1")));
+        assert_eq!(
+            (
+                &v["number"],
+                &v["body"],
+                &v["body_html"],
+                &v["comments"],
+                &v["url"]
+            ),
+            (
+                &json!(1),
+                &json!("+++\nchildren = [2]\n+++\n"),
+                &Value::Null,
+                &Value::Null,
+                &Value::Null
+            )
+        );
+        assert!(v.as_object().unwrap().contains_key("body_html"), "{v}");
+    }
+
+    #[test]
+    fn an_item_answers_for_the_repo_it_names() {
+        let (a, app_opens, web_opens) = two_repos();
+        let r = a.handle(&asking("GET", "/api/item/6", "repo=web"));
+        assert_eq!(
+            (r.status, &body(&r)["title"]),
+            (Status::Ok, &json!("web child"))
+        );
+        assert_eq!(
+            a.handle(&asking("GET", "/api/item/6", "repo=app")).status,
+            Status::NotFound
+        );
+        assert_eq!((opened(&app_opens), opened(&web_opens)), (1, 1));
+        for (query, status) in [
+            (None, Status::BadRequest),
+            (Some("repo=nope"), Status::NotFound),
+            (Some("repo=app&repo=web"), Status::BadRequest),
+        ] {
+            let r = a.handle(&Request {
+                query,
+                ..get("GET", "/api/item/1")
+            });
+            assert_eq!(r.status, status, "{query:?}");
+        }
+        let one = app(Arc::new(Mutex::new(items())));
+        assert_eq!(
+            one.handle(&asking("GET", "/api/item/1", "repo=app")).status,
+            Status::NotFound
+        );
+    }
+
     #[test]
     fn a_tree_is_read_fresh_and_an_unknown_number_is_404() {
         let held = Arc::new(Mutex::new(items()));
@@ -724,7 +873,11 @@ mod tests {
     fn a_failed_read_is_a_502_with_the_reason() {
         let open: Open = Box::new(|| Err(Error::unreadable("the glab login", "no login for host")));
         let a = App::new(open, true, RepoConfig::defaults(), 7420);
-        for (method, path) in [("POST", "/api/refresh"), ("GET", "/api/tree/1")] {
+        for (method, path) in [
+            ("POST", "/api/refresh"),
+            ("GET", "/api/tree/1"),
+            ("GET", "/api/item/1"),
+        ] {
             let r = a.handle(&get(method, path));
             assert_eq!(r.status.code(), 502);
             assert!(
@@ -857,6 +1010,7 @@ mod tests {
         for site in ["cross-site", "same-site"] {
             for (method, path) in [
                 ("GET", "/api/tree/1"),
+                ("GET", "/api/item/1"),
                 ("GET", "/api/families"),
                 ("GET", "/api/repos"),
                 ("POST", "/api/refresh"),
@@ -888,6 +1042,7 @@ mod tests {
             ("POST", "/", "GET, HEAD"),
             ("GET", "/api/refresh", "POST"),
             ("POST", "/api/tree/1", "GET, HEAD"),
+            ("POST", "/api/item/1", "GET, HEAD"),
         ] {
             let r = a.handle(&get(method, path));
             assert_eq!(
@@ -896,7 +1051,7 @@ mod tests {
                 "{method} {path}"
             );
         }
-        for path in ["/", "/api/families", "/api/tree/1"] {
+        for path in ["/", "/api/families", "/api/tree/1", "/api/item/1"] {
             assert_eq!(a.handle(&get("HEAD", path)).status, Status::Ok, "{path}");
         }
         assert_eq!(a.handle(&get("GET", "/")).allow, None);

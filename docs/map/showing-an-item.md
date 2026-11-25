@@ -8,7 +8,7 @@ a person reads during an outage or as JSON.
 **None.**
 
 ## Design model
-- **From the server** it reads one item with its own query (`item_query_with_comments`), since
+- **From the server** it reads one item with its own query (`item_query` without HTML), since
   `level` brings no comments, closing date or type; it does not ask for links, which it does not print, so more than 100 links
   does not stop it (`read_item_with_comments` sets `links` to `None`); more than 100 labels does
   ([reading-the-server](reading-the-server.md)).
@@ -26,7 +26,7 @@ a person reads during an outage or as JSON.
 
 ## Code
 - `src/show.rs — clean, body_lines, render, comment_head, to_json, JSON_VERSION`
-- `src/gitlab.rs — read_item_with_comments, item_query_with_comments`
+- `src/gitlab.rs — read_item_with_comments, item_query`
 - `src/main.rs — Command::Show`
 
 ## Reference behaviour

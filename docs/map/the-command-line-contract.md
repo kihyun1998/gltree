@@ -18,11 +18,11 @@ implementation, which is why its output is what callers read; it does not decide
   family and is a usage error (exit 2) beside a number. Leaving families out gives fewer `roots`, not
   another shape; `tree N --json`, which outside skills read, draws as before (#25).
 - **JSON shapes carry a version**, raised when the shape changes — a field added, removed or renamed; fewer items is not a shape change (#25): `tree` 4 (`related`, `from` and `blocks` on every node, #47; 3 added `url`, `labels` and `extra`, #26), `check` 1,
-  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 4, raised with the tree it carries (#47) (each module's `JSON_VERSION`,
+  `roots` 2, `new` 2, `move` / `edit` 1, `sync` 1, `migrate` 1, `show` 1, `serve`'s API 4, raised with the tree it carries (#47; `/api/item/N` came at 4 with #48, a new route and no changed shape) (each module's `JSON_VERSION`,
   `NEW_JSON_VERSION`). The shapes are in the README and in each owning note.
 - **`serve`** listens on 127.0.0.1 only, port 7420 unless `--port` (0 takes a free one), and prints
   `http://127.0.0.1:<port>/` before its first full read, which runs in the background; what stops it
-  with exit 2 before the address, and why a failed first read does not, and its five routes and their
+  with exit 2 before the address, and why a failed first read does not, and its six routes and their
   JSON are in [serving-the-viewer](serving-the-viewer.md).
 - **`serve` is the one command that can run outside a clone on purpose** (#45, maintainer,
   2026-11-24): with repos registered in `~/.gltree/repos.toml` it shows each of them wherever it

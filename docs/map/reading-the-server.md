@@ -11,8 +11,19 @@ records. [ADR-0001](../adr/0001-the-child-records-its-parent-and-links-are-the-w
 the walk this adapter serves, not the adapter.
 
 ## Design model
-- **The port** (`Tracker`): `all_items`, `item_with_comments`, `level`, `create_item`, `add_link`,
-  `set_desc`, `remove_link`. `GitLab`, `SnapshotFile` (read only) and `FakeTracker` implement it.
+- **The port** (`Tracker`): `all_items`, `item_with_comments`, `item_rendered`, `level`, `create_item`,
+  `add_link`, `set_desc`, `remove_link`. `GitLab`, `SnapshotFile` (read only) and `FakeTracker`
+  implement it; `item_rendered` has a default, `item_with_comments`, which only `GitLab` replaces.
+- **The rendered read** (#48, `read_item_rendered`, for `serve`'s `/api/item/N`) is
+  `item_with_comments`' query with `descriptionHtml` beside `description` and `bodyHtml` beside each
+  comment's `body`, on its first page and every comment page after it (`Html::field`, `item_query`,
+  `comments_query`); `brief` and `parse_comments` read either field wherever an answer carries
+  it, into `Item::desc_html` and `Comment::body_html`. Every other query asks for neither, so
+  `show`, `snapshot` and the full read pay nothing for the HTML. Both fields came back from a
+  self-hosted GitLab when the conductor asked for them, and `GET /api/item/N` on this build answered
+  200 there for three items with `body_html` and every comment's `body_html`, so the whole rendered
+  query, labels and a page of 100 comments included, fits that server's complexity cap of 250
+  (conductor, measured, 2026-11-25).
 - **Project and host** from `git remote get-url origin` of the clone gltree runs in, or, for `serve`
   with repos registered, of each registered clone (`server_in`, #45): `https://[user@]host[:port]/path[.git]`,
   `ssh://user@host[:port]/path[.git]`, `user@host:path[.git]` (`Remote::parse`).
@@ -38,7 +49,7 @@ the walk this adapter serves, not the adapter.
   reads of their own ([keeping-a-snapshot](keeping-a-snapshot.md)).
 - **Labels** are asked as one page, `labels(first:100){pageInfo{hasNextPage} nodes{title}}`, in every
   query that reads them (`LABELS_FRAGMENT`: `level_query` for each item and each linked item,
-  `page_query`, `page_query_with_comments`, `item_query_with_comments`). An item whose labels say
+  `page_query`, `page_query_with_comments`, `item_query`). An item whose labels say
   `hasNextPage` fails the read naming it, checked in `brief`, which every one of them reaches: a short
   label list would show a decided root as `missing` in `serve`'s badges (#28). They are not paged to
   the end: failing loudly is the maintainer's call (maintainer, 2026-11-20). So one item over 100

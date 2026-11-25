@@ -156,6 +156,10 @@ impl Tracker for GitLab {
         read_item_with_comments(&self.project, iid, &mut |q| self.graphql(q))
     }
 
+    fn item_rendered(&self, iid: u64) -> Result<Item, Error> {
+        read_item_rendered(&self.project, iid, &mut |q| self.graphql(q))
+    }
+
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error> {
         let mut out = HashMap::new();
         for chunk in iids.chunks(LEVEL_BATCH) {
@@ -359,10 +363,26 @@ pub fn parse_level(data: &Value) -> Result<HashMap<u64, Linked>, Error> {
     Ok(out)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Html {
+    Without,
+    With,
+}
+
+impl Html {
+    fn field(self, name: &str) -> String {
+        match self {
+            Html::Without => name.into(),
+            Html::With => format!("{name} {name}Html"),
+        }
+    }
+}
+
 /// The fields of an item, with `widgets` extended by `extra`.
-fn item_fields(extra: &str) -> String {
+fn item_fields(extra: &str, html: Html) -> String {
+    let desc = html.field("description");
     format!(
-        "iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{description}}          {LABELS_FRAGMENT}{extra}}}"
+        "iid title state closedAt webUrl workItemType{{name}} widgets{{         ... on WorkItemWidgetDescription{{{desc}}}          {LABELS_FRAGMENT}{extra}}}"
     )
 }
 
@@ -379,10 +399,11 @@ fn after_arg(after: Option<&str>) -> String {
 }
 
 /// One page of an item's comments, after `after` (a cursor from the previous page).
-fn notes_fragment(after: Option<&str>) -> String {
+fn notes_fragment(after: Option<&str>, html: Html) -> String {
     let after = after_arg(after);
+    let body = html.field("body");
     format!(
-        " ... on WorkItemWidgetNotes{{notes(first:100,filter:ONLY_COMMENTS{after}){{pageInfo{{hasNextPage endCursor}} nodes{{system internal createdAt body author{{username}}}}}}}}"
+        " ... on WorkItemWidgetNotes{{notes(first:100,filter:ONLY_COMMENTS{after}){{pageInfo{{hasNextPage endCursor}} nodes{{system internal createdAt {body} author{{username}}}}}}}}"
     )
 }
 
@@ -391,7 +412,7 @@ fn page_query_with(project: &str, after: Option<&str>, extra: &str) -> String {
     format!(
         "query{{project(fullPath:{project}){{workItems(first:100{after}){{pageInfo{{hasNextPage endCursor}}          nodes{{{fields}}}}}}}}}",
         project = Value::String(project.into()),
-        fields = item_fields(&format!("{LINKS_FRAGMENT}{extra}")),
+        fields = item_fields(&format!("{LINKS_FRAGMENT}{extra}"), Html::Without),
     )
 }
 
@@ -402,24 +423,22 @@ pub fn page_query(project: &str, after: Option<&str>) -> String {
 
 /// One page of every work item with the first page of each one's comments.
 pub fn page_query_with_comments(project: &str, after: Option<&str>) -> String {
-    page_query_with(project, after, &notes_fragment(None))
+    page_query_with(project, after, &notes_fragment(None, Html::Without))
 }
 
-/// One item, without its links, with the first page of its comments.
-pub fn item_query_with_comments(project: &str, iid: u64) -> String {
+fn item_query(project: &str, iid: u64, html: Html) -> String {
     format!(
         "query{{project(fullPath:{project}){{workItems(iids:[\"{iid}\"],first:1){{nodes{{{fields}}}}}}}}}",
         project = Value::String(project.into()),
-        fields = item_fields(&notes_fragment(None)),
+        fields = item_fields(&notes_fragment(None, html), html),
     )
 }
 
-/// The page of an item's comments after `after`.
-pub fn comments_query(project: &str, iid: u64, after: &str) -> String {
+fn comments_query(project: &str, iid: u64, after: &str, html: Html) -> String {
     format!(
         "query{{project(fullPath:{project}){{workItems(iids:[\"{iid}\"],first:1){{nodes{{widgets{{{notes}}}}}}}}}}}",
         project = Value::String(project.into()),
-        notes = notes_fragment(Some(after)),
+        notes = notes_fragment(Some(after), html),
     )
 }
 
@@ -458,6 +477,7 @@ fn parse_comments(node: &Value) -> Result<Option<CommentPage>, Error> {
             created_at: n["createdAt"].as_str().ok_or_else(|| bad(n))?.into(),
             body: n["body"].as_str().ok_or_else(|| bad(n))?.into(),
             internal: n["internal"].as_bool().ok_or_else(|| bad(n))?,
+            body_html: n["bodyHtml"].as_str().map(String::from),
         });
     }
     let next = next_cursor(notes, "comments")?;
@@ -488,6 +508,7 @@ fn all_comments(
     project: &str,
     iid: u64,
     node: &Value,
+    html: Html,
     ask: &mut impl FnMut(&str) -> Result<Value, Error>,
 ) -> Result<Option<Vec<Comment>>, Error> {
     let Some(CommentPage {
@@ -498,7 +519,7 @@ fn all_comments(
         return Ok(None);
     };
     while let Some(cursor) = next {
-        let data = ask(&comments_query(project, iid, &cursor))?;
+        let data = ask(&comments_query(project, iid, &cursor, html))?;
         let node = data
             .pointer("/project/workItems/nodes/0")
             .ok_or(Error::NotFound(iid))?;
@@ -532,7 +553,7 @@ pub fn read_items_with_comments(
         let data = ask(&page_query_with_comments(project, after.as_deref()))?;
         let (page, next) = parse_page(&data)?;
         for (mut item, node) in page.into_iter().zip(nodes_of(&data)) {
-            item.comments = all_comments(project, item.iid, node, ask)?;
+            item.comments = all_comments(project, item.iid, node, Html::Without, ask)?;
             items.push(item);
         }
         match next {
@@ -548,12 +569,31 @@ pub fn read_item_with_comments(
     iid: u64,
     ask: &mut impl FnMut(&str) -> Result<Value, Error>,
 ) -> Result<Item, Error> {
-    let data = ask(&item_query_with_comments(project, iid))?;
+    read_item(project, iid, Html::Without, ask)
+}
+
+/// One item with every comment and the HTML the server renders for its description and each
+/// comment, through `ask`.
+pub fn read_item_rendered(
+    project: &str,
+    iid: u64,
+    ask: &mut impl FnMut(&str) -> Result<Value, Error>,
+) -> Result<Item, Error> {
+    read_item(project, iid, Html::With, ask)
+}
+
+fn read_item(
+    project: &str,
+    iid: u64,
+    html: Html,
+    ask: &mut impl FnMut(&str) -> Result<Value, Error>,
+) -> Result<Item, Error> {
+    let data = ask(&item_query(project, iid, html))?;
     let (page, _) = parse_page(&data)?;
     let mut item = page.into_iter().next().ok_or(Error::NotFound(iid))?;
     let node = nodes_of(&data).first().ok_or(Error::NotFound(iid))?;
     item.links = None;
-    item.comments = all_comments(project, iid, node, ask)?;
+    item.comments = all_comments(project, iid, node, html, ask)?;
     Ok(item)
 }
 
@@ -626,6 +666,10 @@ fn brief(n: &Value) -> Result<Item, Error> {
         .find_map(|w| w.get("description").and_then(Value::as_str))
         .unwrap_or("");
     let mut item = Item::new(iid, state, title, desc);
+    item.desc_html = widgets
+        .iter()
+        .find_map(|w| w.get("descriptionHtml").and_then(Value::as_str))
+        .map(String::from);
     item.url = n["webUrl"].as_str().map(String::from);
     let labels: Vec<&Value> = widgets.iter().filter_map(|w| w.get("labels")).collect();
     if labels
@@ -969,6 +1013,92 @@ mod tests {
     }
 
     #[test]
+    fn a_rendered_read_carries_the_html_of_the_body_and_of_every_comment_page() {
+        let asked = Default::default();
+        let html_note = |body: &str, html: &str, at: &str| {
+            json!({ "system": false, "internal": false, "createdAt": at, "body": body,
+                    "bodyHtml": html, "author": { "username": "mina" } })
+        };
+        let mut ask = scripted(
+            vec![
+                page(
+                    vec![full_node(
+                        5,
+                        vec![
+                            json!({ "description": "**hi**", "descriptionHtml": "<p><strong>hi</strong></p>" }),
+                            notes_widget(
+                                vec![html_note("a", "<p>a</p>", "2026-01-01T00:00:00Z")],
+                                Some("c1"),
+                            ),
+                        ],
+                    )],
+                    None,
+                ),
+                page(
+                    vec![full_node(
+                        5,
+                        vec![notes_widget(
+                            vec![html_note("b", "<p>b</p>", "2026-01-02T00:00:00Z")],
+                            None,
+                        )],
+                    )],
+                    None,
+                ),
+            ],
+            &asked,
+        );
+        let item = read_item_rendered("team/app", 5, &mut ask).unwrap();
+        assert_eq!(
+            (item.desc.as_str(), item.desc_html.as_deref()),
+            ("**hi**", Some("<p><strong>hi</strong></p>"))
+        );
+        let comments = item.comments.unwrap();
+        let html: Vec<_> = comments.iter().map(|c| c.body_html.as_deref()).collect();
+        assert_eq!(html, [Some("<p>a</p>"), Some("<p>b</p>")]);
+        let asked = asked.borrow();
+        assert_eq!(asked.len(), 2);
+        assert!(
+            asked[0].contains("description descriptionHtml") && asked[0].contains("bodyHtml"),
+            "{}",
+            asked[0]
+        );
+        assert!(asked[1].contains("bodyHtml"), "{}", asked[1]);
+        for q in asked.iter() {
+            assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
+        }
+    }
+
+    #[test]
+    fn every_other_read_asks_for_no_html_and_an_item_without_it_carries_none() {
+        for q in [
+            level_query("team/app", &[3]),
+            page_query("team/app", None),
+            page_query_with_comments("team/app", None),
+            item_query("team/app", 5, Html::Without),
+            comments_query("team/app", 5, "c", Html::Without),
+        ] {
+            assert!(!q.contains("Html"), "{q}");
+        }
+        let asked = Default::default();
+        let mut ask = scripted(
+            vec![page(
+                vec![full_node(
+                    5,
+                    vec![notes_widget(
+                        vec![note("a", "2026-01-01T00:00:00Z", false, false)],
+                        None,
+                    )],
+                )],
+                None,
+            )],
+            &asked,
+        );
+        let item = read_item_rendered("team/app", 5, &mut ask).unwrap();
+        assert_eq!(item.desc_html, None);
+        assert_eq!(item.comments.unwrap()[0].body_html, None);
+    }
+
+    #[test]
     fn a_failed_comment_page_fails_the_whole_read() {
         let mut calls = 0;
         let mut ask = |_: &str| {
@@ -1061,7 +1191,7 @@ mod tests {
 
     #[test]
     fn one_item_read_from_the_server_does_not_ask_for_its_links() {
-        assert!(!item_query_with_comments("team/app", 5).contains("linkedItems"));
+        assert!(!item_query("team/app", 5, Html::Without).contains("linkedItems"));
         assert!(page_query_with_comments("team/app", None).contains("linkedItems"));
         assert!(page_query("team/app", None).contains("linkedItems"));
         let asked = Default::default();
@@ -1087,8 +1217,8 @@ mod tests {
         }
         for q in [
             page_query_with_comments("team/app", None),
-            item_query_with_comments("team/app", 5),
-            comments_query("team/app", 5, "ab\"c"),
+            item_query("team/app", 5, Html::Without),
+            comments_query("team/app", 5, "ab\"c", Html::Without),
         ] {
             assert!(q.contains("notes(first:100,filter:ONLY_COMMENTS"), "{q}");
             assert_eq!(q.matches('{').count(), q.matches('}').count(), "{q}");
@@ -1163,7 +1293,7 @@ mod tests {
             level_query("team/app", &[3]),
             page_query("team/app", None),
             page_query_with_comments("team/app", None),
-            item_query_with_comments("team/app", 5),
+            item_query("team/app", 5, Html::Without),
         ] {
             let asked = q.matches("labels").count();
             assert!(asked > 0, "{q}");

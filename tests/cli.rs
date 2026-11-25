@@ -1469,11 +1469,24 @@ fn node(iid: u64, state: &str, title: &str, desc: &str, links: &[u64]) -> serde_
 fn stand_in(
     nodes: Vec<serde_json::Value>,
 ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let (port, hits, _) = stand_in_keeping(nodes);
+    (port, hits)
+}
+
+fn stand_in_keeping(
+    nodes: Vec<serde_json::Value>,
+) -> (
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
     use std::io::{BufRead, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = std::sync::Arc::clone(&hits);
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&asked);
     let body = serde_json::json!({"data": {"project": {"workItems": {
         "pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}}}})
     .to_string();
@@ -1495,6 +1508,9 @@ fn stand_in(
             }
             let mut sink = vec![0; length];
             let _ = reader.read_exact(&mut sink);
+            kept.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&sink).into_owned());
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let _ = write!(
                 stream,
@@ -1503,7 +1519,7 @@ fn stand_in(
             );
         }
     });
-    (port, hits)
+    (port, hits, asked)
 }
 
 fn read_repos(base: &str) -> serde_json::Value {
@@ -1525,6 +1541,86 @@ fn read_repos(base: &str) -> serde_json::Value {
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+#[test]
+fn serve_reads_an_item_with_the_html_gitlab_renders_for_the_repo_named() {
+    let home = outside_a_clone("serve-item-home");
+    let mut root = node(1, "OPEN", "app root", "+++\nchildren = []\n+++\nbody", &[]);
+    root["widgets"][0]["descriptionHtml"] = serde_json::json!("<p>body</p>");
+    root["widgets"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"notes": {
+            "pageInfo": {"hasNextPage": false, "endCursor": null},
+            "nodes": [{"system": false, "internal": true, "createdAt": "2026-01-01T00:00:00Z",
+                       "body": "a comment", "bodyHtml": "<p>a comment</p>",
+                       "author": {"username": "mina"}}]}}));
+    let (port, _, asked) = stand_in_keeping(vec![root]);
+    let app = clone_of("serve-item-app", "https://app.example.invalid/team/app.git");
+    let path = app.to_string_lossy().into_owned();
+    assert_eq!(
+        in_home(&home, &["serve", "add", path.as_str()])
+            .status
+            .code(),
+        Some(0)
+    );
+    let glab = home.join("glab");
+    std::fs::create_dir_all(&glab).unwrap();
+    std::fs::write(
+        glab.join("config.yml"),
+        format!(
+            "hosts:\n    app.example.invalid:\n        api_host: 127.0.0.1:{port}\n        api_protocol: http\n        token: a-token\n"
+        ),
+    )
+    .unwrap();
+    let s = serve_from(
+        at_home(&mut gltree_cmd(&home, &["serve", "--port", "0"]), &home)
+            .env("GLAB_CONFIG_DIR", &glab)
+            .env_remove("GITLAB_TOKEN")
+            .stderr(std::process::Stdio::null()),
+    );
+    read_repos(&s.base);
+    let before = asked.lock().unwrap().len();
+    let (status, v) = json_of("GET", &format!("{}/api/item/1?repo=app", s.base));
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (&v["version"], &v["number"], &v["title"], &v["body_html"]),
+        (
+            &serde_json::json!(4),
+            &serde_json::json!(1),
+            &serde_json::json!("app root"),
+            &serde_json::json!("<p>body</p>")
+        )
+    );
+    assert_eq!(
+        v["comments"],
+        serde_json::json!([{"author": "mina", "created_at": "2026-01-01T00:00:00Z",
+            "internal": true, "body": "a comment", "body_html": "<p>a comment</p>"}])
+    );
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), before + 1);
+    let query = &asked[before];
+    assert!(
+        query.contains("descriptionHtml") && query.contains("bodyHtml"),
+        "{query}"
+    );
+    assert!(
+        !asked[..before].iter().any(|q| q.contains("Html")),
+        "the full read asked for HTML"
+    );
+    assert_eq!(json_of("GET", &format!("{}/api/item/1", s.base)).0, 400);
+}
+
+#[test]
+fn serve_from_a_snapshot_reads_an_item_with_no_html() {
+    let dir = clone_with_config("serve-item-snapshot", BADGES);
+    let s = serve_in(&dir, &fixture_path());
+    let (status, v) = json_of("GET", &format!("{}/api/item/1", s.base));
+    assert_eq!((status, &v["number"]), (200, &serde_json::json!(1)), "{v}");
+    assert!(v["body"].is_string(), "{v}");
+    assert_eq!(v["body_html"], serde_json::Value::Null);
+    assert_eq!(json_of("GET", &format!("{}/api/item/99999", s.base)).0, 404);
 }
 
 #[test]

@@ -78,6 +78,11 @@ pub trait Tracker {
     fn all_items(&self) -> Result<Vec<Item>, Error>;
     /// One item with its labels and comments; `Error::NotFound` when there is none.
     fn item_with_comments(&self, iid: u64) -> Result<Item, Error>;
+    /// `item_with_comments`, with the HTML the source renders for the description and each
+    /// comment where it renders any; a source that renders none leaves both `None`.
+    fn item_rendered(&self, iid: u64) -> Result<Item, Error> {
+        self.item_with_comments(iid)
+    }
     /// The given items with their linked items, in one request; an absent item is left out.
     fn level(&self, iids: &[u64]) -> Result<HashMap<u64, Linked>, Error>;
     fn create_item(&self, title: &str, desc: &str, labels: &[String]) -> Result<Created, Error>;

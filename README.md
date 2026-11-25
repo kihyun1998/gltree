@@ -285,8 +285,9 @@ list, the repo config, the port, and for the server git's `origin`, the glab log
 them (the finished ones behind a toggle), newest (highest number) first, each with its title, a
 progress bar, how many items are left and its badges. Every count above the list spans every family,
 finished ones included. On the right is the selected family's tree, read fresh when it is selected,
-children in ascending order, with every item linked to its page on the server; each item shows at
-most three labels and a `+k` chip naming the rest. A mark tells an item to do (a ring), blocked by
+children in ascending order, every row ending in a `›`: a click opens the item in the detail pane
+(below), and a click with Ctrl, Cmd or Shift, or with the middle button, opens its page on the server
+in a new tab. Each item shows at most three labels and a `+k` chip naming the rest. A mark tells an item to do (a ring), blocked by
 an open item (a ring with a bar) and done (a check) apart, in the list, the detail and the tree.
 Under each item, children whose whole subtree is closed fold into one `✓ N done — show` row that
 unfolds them; the "Show done items" switch unfolds them all. Under the detail's head, a relations
@@ -295,8 +296,25 @@ every item's under it: each row shows the target's mark, number and title, `#S �
 is item S's rather than the root's, and `in #R` when the target is in family R; each group shows five
 rows and folds the rest behind `N more`, and a family with none has no box. Choosing a row goes to
 the target: it selects the target's family, turning "Finished families" on when that family is
-hidden, unfolds the fold that hides it, and marks it briefly. The refresh button reads the
-whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
+hidden, unfolds the fold that hides it, and marks it briefly.
+
+The search box in the top bar ("Search # or title") finds any item of the repo shown, children
+included, in the last full read. A number, with or without `#`, lists that item first and then up to
+nine more whose number starts with it, lowest first; words list the items whose titles hold every
+word, in any case, open before closed and then highest number first, at most 30. Each result shows
+the item's mark, number and title, the words marked, and its family and the path under it (`in #12 ›
+#34`). Enter or a click goes to the item as a relations row does; the arrow keys move through the
+list and Escape closes it. Until the first full read is done the box says it is waiting.
+
+"View issue" in the detail's head, or a click on a tree row, opens the item in the detail pane: its
+state, number, family, title, labels, body and comments with their author, time and an `internal`
+mark, read from the server each time it opens and rendered as GitLab renders them, the TOML header
+left out. Links open the server in a new tab; images show as links, since they need a sign-in, and
+nothing in a body runs. From a snapshot, which keeps no rendering, the body and comments show as
+plain text. "← Back to the tree" returns to the family as it was left. Choosing another family, a
+search result or another tab closes the view; a refresh leaves it open.
+
+The refresh button reads the whole tracker again, which takes as long as `gltree tree` does without a number. The page fetches nothing from the internet, follows the system's light or dark
 mode, and turns its motion off when the system asks for less. It writes nothing to the tracker, and
 the token stays in the server process.
 
@@ -335,8 +353,13 @@ The page reads a small JSON API:
   answers that shape at once, `state` `reading`, and starts nothing.
 - `GET /api/tree/N`: N's tree as `gltree tree N --json` gives it, read fresh; 404 for a number the
   tracker does not hold.
+- `GET /api/item/N`: item N read fresh, `{"version": 4, "number", "title", "state", "labels", "url",
+  "body", "body_html", "comments": [{"author", "created_at", "internal", "body", "body_html"}]}`.
+  `body` and each comment's `body` are the Markdown; `body_html` is the HTML GitLab renders for it,
+  `null` from a snapshot. `comments` is `null` when a snapshot did not record them. 404 for a number
+  the tracker does not hold. The page cleans the HTML before it shows it; another caller must too.
 
-With repos registered, `/api/families`, `/api/refresh` and `/api/tree/N` name one with
+With repos registered, `/api/families`, `/api/refresh`, `/api/tree/N` and `/api/item/N` name one with
 `?repo=NAME`, compared as sent: without it they answer 400, and 404 for a name not registered. With
 none registered they take no `repo` and answer 404 to one.
 

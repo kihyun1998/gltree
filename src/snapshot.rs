@@ -287,6 +287,7 @@ mod tests {
             created_at: "2026-01-02T03:04:05Z".into(),
             body: "text".into(),
             internal: true,
+            body_html: None,
         }]);
         let mut b = crate::item::Item::new(2, State::Open, "t", "");
         b.comments = Some(vec![]);
