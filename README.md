@@ -308,17 +308,29 @@ checked before the address is printed, and a failure there stops with exit statu
 list, the repo config, the port, and for the server git's `origin`, the glab login and the CA certificate, or for
 `--snapshot` that the file opens and is not a directory. On the left are the families, as `gltree tree` with no number picks
 them (the finished ones behind a toggle), newest (highest number) first, each with its title, a
-progress bar, how many items are left and its badges. Every count above the list spans every family,
+progress bar, how many items are left and its badges. Right below each family come its sub-families,
+the items under it that have children of their own, in tree order and indented by depth, each as
+`↳` and its title, `#X · N children`, a progress bar and how many are left; a finished one shows
+only while "Finished families" is on. Every count above the list spans every family,
 finished ones included. On the right is the selected family's tree, read fresh when it is selected,
 children in ascending order, every row ending in a `›`: a click opens the item in the detail pane
 (below), and a click with Ctrl, Cmd or Shift, or with the middle button, opens its page on the server
-in a new tab. Each item shows at most three labels and a `+k` chip naming the rest. A mark tells an item to do (a ring), blocked by
+in a new tab. Each item shows at most three labels and a `+k` chip naming the rest, and `blocks #N`
+beside `blocked by #N` when it blocks other items. A mark tells an item to do (a ring), blocked by
 an open item (a ring with a bar) and done (a check) apart, in the list, the detail and the tree.
 Under each item, children whose whole subtree is closed fold into one `✓ N done — show` row that
-unfolds them; the "Show done items" switch unfolds them all. Under the detail's head, a relations
-box gathers the family's `related`, `from` ("Found while working on") and `blocks`, the root's and
-every item's under it: each row shows the target's mark, number and title, `#S →` when the relation
-is item S's rather than the root's, and `in #R` when the target is in family R; each group shows five
+unfolds them; the "Show done items" switch unfolds them all.
+
+Choosing a sub-family in the list, or the `▸ N` button that ends every tree row with children,
+zooms the detail into that item: its progress ring, relations and tree, under a path `#R title › …
+› #X` whose buttons zoom out. `#R` on the path or the family's own row returns to the whole family,
+and so do choosing another family, a search result or another tab; a refresh keeps the zoom while the
+item is still in that family.
+
+Under the detail's head, a relations
+box gathers the open blockers (Blocked by), `blocks`, `from` (From) and `related` of the item shown
+and every item under it, in that order: each row shows the target's mark, number and title, `#S →` when the relation
+is item S's rather than the shown item's, and `in #R` when the target is in family R; each group shows five
 rows and folds the rest behind `N more`, and a family with none has no box. Choosing a row goes to
 the target: it selects the target's family, turning "Finished families" on when that family is
 hidden, unfolds the fold that hides it, and marks it briefly.
@@ -332,7 +344,9 @@ the item's mark, number and title, the words marked, and its family and the path
 list and Escape closes it. Until the first full read is done the box says it is waiting.
 
 "View issue" in the detail's head, or a click on a tree row, opens the item in the detail pane: its
-state, number, family, title, labels, body and comments with their author, time and an `internal`
+state, number, its path in the family (`#R › #M ›`), title, its own relations in the same four
+groups with their counts (choosing one opens that item's view when it is in the same family and goes
+to it in its family's tree otherwise), labels, body and comments with their author, time and an `internal`
 mark, read from the server each time it opens and rendered as GitLab renders them, the TOML header
 left out. Links open the server in a new tab; images show as links, since they need a sign-in, and
 nothing in a body runs. From a snapshot, which keeps no rendering, the body and comments show as

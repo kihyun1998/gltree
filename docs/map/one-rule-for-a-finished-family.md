@@ -13,7 +13,7 @@ to one leaves the page and `tree` disagreeing about which families are done, wit
 
 ## Territories it holds in
 - [drawing-a-tree](drawing-a-tree.md) — `with_open_work`, called by `Command::Tree` without a number.
-- [serving-the-viewer](serving-the-viewer.md) — `finished` in the page, read by `pick` for the toggle (every count on the page spans every family) and by `branch` to fold a parent's done children.
+- [serving-the-viewer](serving-the-viewer.md) — `finished` in the page, read by `pick` for the toggle (every count on the page spans every family), by `subs` to list a finished sub-family only with the toggle on, and by `branch` to fold a parent's done children.
 
 ## What a violation looks like
 A family `gltree tree` prints shows up as finished on the page, or the page's default view lists a

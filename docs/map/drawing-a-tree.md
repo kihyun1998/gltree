@@ -83,7 +83,7 @@ the server one depth at a time.
 - [reading-the-server](reading-the-server.md) — the walk's cost and correctness rest on `level`: 100 items a request, and an overflow of linked items, or of one item's labels, is an error rather than a short tree.
 - [writing-the-tree](writing-the-tree.md) — `move` refuses a cycle through `subtree`; a walk that misses children lets a move under its own descendant through.
 - [the-command-line-contract](the-command-line-contract.md) — the text and `--json` are read by outside skills.
-- [serving-the-viewer](serving-the-viewer.md) — the page reads the JSON node and copies the finished-family rule (`with_open_work`) into its `finished`; its relations box reads `related`, `from` and `blocks`.
+- [serving-the-viewer](serving-the-viewer.md) — the page reads the JSON node and copies the finished-family rule (`with_open_work`) into its `finished`; its relations boxes (the family's and an item's own in the issue view) read `blocked_by_open`, `blocks`, `from` and `related`, and a tree row shows `blocks`.
 
 ## Known holes / open
 - An item with more than 100 links cannot be walked; the error says to draw it from a snapshot.

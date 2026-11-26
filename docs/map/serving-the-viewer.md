@@ -2,7 +2,8 @@
 
 ## What it is
 `gltree serve`: a local web server on 127.0.0.1 that serves one page embedded in the binary and a
-small JSON API over the tracker — the families on the left, the selected family's tree on the right,
+small JSON API over the tracker — the families on the left, each followed by its sub-families, the
+selected family's tree on the right, zoomed into one of its items on request,
 a refresh button, the badges a repo names in its config, a search over every item, and an issue view
 that reads one item's body and comments. It
 shows the tracker of the clone it runs in, or, once repos are registered in `~/.gltree/repos.toml`,
@@ -159,7 +160,9 @@ reasons below.
   `done` when nothing is left, beside the badge chips. `left` is the open descendants, or the family
   itself, 1 or 0, when it has no children. A tree row is a grid of mark, number and title, the title
   taking the rest of the width and wrapping anywhere; the blockers and at most 3 labels, then a `+k`
-  chip whose `title` names the rest, sit on a second line under the title (`node`). On that tracker
+  chip whose `title` names the rest, sit on a second line under the title (`node`); since #50,
+  `blocks #N, …` in `--accent` follows `blocked by #N` there when the item names items it blocks
+  (`bks`, the item's `blocks` as the tree JSON carries it). On that tracker
   labels per item ran to 12 and titles to 149 characters, and the one-line row let labels take the
   title's width and run past the card. The detail head shows the family's own labels in full.
 - **Done items fold** (#41). Under each parent, the root included, the children whose whole subtree
@@ -181,10 +184,15 @@ reasons below.
   the fold row has no counterpart, and the first revealed row stands where it stood (#37).
 - **The relations box** (#47: the maintainer picked variant 2 of three, run on a real tracker of
   about 2,800 items, 2026-11-24; there 96 of 106 `related` links and 114 of 153 `from` pointed into
-  another family). Under the detail's head, `rels` gathers the `related`, `from` and `blocks` of
-  every node of the drawn family, the root's first and then each item's in the tree's order, into
-  three groups, Related, Found while working on, Blocks, each left out when empty, and the whole box
-  left out when all three are. A row is the target's mark, number and title, `#S →` before it when
+  another family). Under the detail's head, `rels` gathers the `blocked_by_open`, `blocks`, `from`
+  and `related` of every node of the drawn item's subtree (the family, or the zoomed item, below),
+  that item's first and then each item's in the tree's order, into four groups, Blocked by, Blocks,
+  From, Related (`KINDS`; #50, maintainer, 2026-11-26: Blocked by added first, the order shared with
+  the issue view's box, and "Found while working on" renamed From after the header key), each left
+  out when empty, and the whole box left out when all four are. A relation whose two ends are both in
+  the drawn subtree shows in both of its groups, `#A → #B` under Blocked by and `#B → #A` under
+  Blocks: each group stays the whole list of its own direction (maintainer, 2026-11-26). Blocked by
+  lists open blockers only, since the tree JSON carries `blocked_by_open` alone. A row is the target's mark, number and title, `#S →` before it when
   the relation is item S's rather than the root's, and `in #R` after it when the target's family is
   not the drawn one and the target is not R itself, since `#R … in #R` would name it twice (maintainer,
   2026-11-24, after #47 shipped it on every relation to a one-item family). A target in the drawn family is read from it; one in another family from the
@@ -195,12 +203,14 @@ reasons below.
   with `unfolded` when the family changes); it moves focus to the first row it revealed, as an
   unfold does. Choosing a row goes to the target (`jump`): another family is selected, with "Finished
   families" turned on first when that family is finished and hidden, and its folds reset as any new
-  selection's are (`reset`). The target stays the page's aim (`aim`) until a family row is clicked,
+  selection's are (`reset`). A target outside the zoomed item's subtree zooms out first (`land`,
+  `inZoom`; worker's judgement, 2026-11-26: the zoomed tree does not hold it, so the go-to would
+  lead nowhere). The target stays the page's aim (`aim`) until a family row is clicked,
   another jump is made or the tab changes: every detail drawn for its family, the full read's first
   and the walk's after it, first unfolds the parent of the first finished item on the path from the
-  root to the target (`reveal`, `trail`), the one fold that hides it, so a walk that finds the
+  drawn item (the root, or the zoomed item) to the target (`reveal`, `trail`, `zoomed`), the one fold that hides it, so a walk that finds the
   target newly closed does not fold it away again (#47's bug review). The target's tree row, or the
-  detail's title when the target is the family's root, is focused once, scrolled into view and
+  detail's title when the target is the drawn item (the family's root, or the zoomed item), is focused once, scrolled into view and
   marked with `hit` for 1.6 s (`aimAt`), the mark put back on each redraw within that time. The
   title is a counterpart of its own in `hold`, so a redraw keeps focus on it (#47's spec review).
 - **Search** (#48: the maintainer picked variant A of two, run on a real self-hosted tracker,
@@ -224,8 +234,18 @@ reasons below.
   until that repo is read, and a full read that lands while the rows are open runs the query again.
 - **The issue view** (#48: the maintainer picked variant 1 of three, 2026-11-25). "View issue" in the
   detail's head, or a tree row, opens an item in the detail pane, replacing its contents in place
-  (`openItem`, `putView`): "← Back to the tree", "Open in GitLab", the mark, number, state and
-  `in #R` for an item under the root, the title, the labels, then the body and the comments. The head
+  (`openItem`, `putView`): "← Back to the tree", "Open in GitLab", the mark, number, state and,
+  for an item under the root, the path to it, `#R › #M ›` (#50; it replaced `in #R`), the title,
+  the item's own relations, the labels, then the body and the comments. The relations box (`own`;
+  #50, the maintainer picked variant 1 of three, 2026-11-26) holds the opened item's
+  `blocked_by_open`, `blocks`, `from` and `related` alone, in `KINDS`' groups, each headed with
+  its count and left out when empty, the box left out when all are; it is drawn from the tree node
+  the view was opened with, so it shows while the item is still read. A target in the drawn family is
+  read from it; one elsewhere from `where`, with `in #R` as the family box shows it; one in neither
+  is its number alone and no button. Choosing a target in the drawn family opens its issue view, which
+  keeps the tree's scroll from the first open for "← Back"; one in another family goes to it as a
+  relations row does (`jump`). Finds (the items whose `from` names this one) are not listed: the
+  API carries no reverse list (maintainer, 2026-11-26). The head
   is drawn at once from the drawn tree, with "Reading #N from GitLab…" under it, and redrawn from
   `GET /api/item/N` when it answers; a failure shows "Cannot read #N: " and the server's message, with
   "Open in GitLab" still in the head. The item is read on every open and nothing is kept
@@ -242,6 +262,31 @@ reasons below.
   switch close it (`closeView`). Opening moves focus to "← Back"; Back puts it on the row that opened
   it, or on "View issue", and on the detail when that row is gone. A redraw keeps focus on both by
   the keys *Focus survives a redraw* lists.
+- **Sub-families and the zoom** (#50: the maintainer picked variant A of three, run on a real
+  self-hosted tracker, 2026-11-25). A sub-family is an item that is not a root and has at least one
+  child. Each root's row in the list is followed by its sub-families in tree order, depth first
+  (`subs`, `sub`): a button indented 18 px per level below the root, its mark, `↳` and the title,
+  `#X · N children`, its progress bar and `N left` or `done`. A finished sub-family follows the
+  finished-family toggle ([one rule for a finished family](one-rule-for-a-finished-family.md)): hidden
+  while it is off, and every sub-family of a hidden family goes with it. The list stays one flat
+  list with no folding of its own (issue #50, story 23); the prototype saw at most 4 sub-families in
+  a repo and the issue estimates 30, unmeasured. Zoom is one piece of page state, `zoom`, the root
+  and the item zoomed into or `null`, and zooming to the root itself clears it (`zoomTo`).
+  `detail` takes the family's root as before and draws the zoomed item through the same `card` a
+  root gets, with a path in front (`crumb`, a `nav` of one button per ancestor, `#N` and the
+  title, then `#X`), so the ring, the relations box and the tree are the item's with no code of
+  their own; `last`, the walk, the folds and the issue view keep the family's root. A sub row
+  zooms into its item, selecting its family first; a tree row with children carries a `▸ N` button
+  after the row's link, outside it, labelled "Zoom into #X" (`zrow`, `zchip`); an ancestor on the
+  path zooms out to it, and the root's button returns to the whole family; the chip and the path
+  move focus to the detail's title. The list's highlight and `aria-current` sit on the zoomed
+  item's sub row while it is listed, and otherwise on the root's row (`moveHl`). What clears the
+  zoom: the root's row (the same family clicked again) and the root on the path, another family
+  (`choose`), a tab switch (`show`, since two repos can hold the same numbers), and a search result
+  (`choice`); clearing redraws the detail and moves the highlight with it. A refresh and a walk keep
+  it while the item is still under that root in what they drew, and drop it otherwise
+  (`keepZoom`, in both `choose` and `draw`, so the kept read's first frame already shows the whole
+  family when the item moved).
 - **Cleaning GitLab's HTML** (#48). GitLab's GraphQL gives the rendered HTML of a description
   (`WorkItemWidgetDescription.descriptionHtml`) and of a comment (`Note.bodyHtml`), both measured
   present on a self-hosted GitLab by the conductor, a body of about 22,000 characters rendered with its
@@ -371,8 +416,10 @@ reasons below.
   focus, `paint` (the first read and a refresh) and `draw` (a walked tree, an unfold, the "Show done
   items" switch), note before they redraw whether focus is inside what they replace (`hold`), and
   afterwards focus its counterpart in what was drawn (`go`), by a key that survives the redraw: a
-  family row by its number (`data-s`), a tree row by its item number (`data-n`), a fold row by its
-  parent's number (`data-u`), a relations-box row by its group, source and target (`data-j`), a
+  family row by its number (`data-s`), a sub-family row by its item number (`data-x`), a tree row by
+  its item number (`data-n`), a fold row by its parent's number (`data-u`), a zoom chip by its item
+  number (`data-z`), a path button by its item number (`data-p`), a relations-box row by its group,
+  source and target (`data-j`), an issue-view relations row by its group and target (`data-ik`), a
   group's `N more` by its group (`data-g`), "Open in GitLab" and "View issue" by their class, the issue view's "← Back" (`#vb`) and the detail itself by their id. Keys
   are compared as strings against `dataset`, never put into a selector, so a number the tracker
   sends cannot change what is looked up; the search covers only `#rows` and `#det`, which a fading
@@ -380,7 +427,8 @@ reasons below.
   judgement, 2026-11-24, choosing the nearest thing that still means the same place): a family row
   that left the list falls to the selected family's row, or the list when it is empty; something in
   the detail of a family still selected falls to the tree row now at the position it had, the last
-  row when the tree got shorter. Everything else falls to the detail: the family gone, the tree
+  row when the tree got shorter, the row's link where that position holds a row with a zoom chip
+  (`rowOf`). Everything else falls to the detail: the family gone, the tree
   empty, or "Open in GitLab" or the detail itself with nothing in its place.
   A target that cannot take focus (the detail) gets `tabIndex` -1 for as
   long as it holds focus, and loses it on blur: `draw` keeps the detail element, and a detail left
@@ -464,6 +512,34 @@ reasons below.
   Three mutations were each seen failing their check: no `gen` guard in `ask`, no `replaceState`, and
   the tab row rebuilt on every update. The stand-in answered a walk with the page shape, so a walked
   tree drew the stale note; the walk itself is #30's, unchanged here.
+- #50's sub-families, zoom and relations were checked in headless Edge over CDP at 1440×900 with a
+  stubbed `fetch` serving two repos of made-up items (2026-11-26): one with a family holding
+  sub-families two levels deep, a finished sub-family, an in-family blocked-by pair, relations to
+  another family and to an item not in the read, an HTML title, a family with no sub-family and a
+  finished family with one, and a family whose sub-family holds a relation to itself beside a finished
+  sub-family whose children relate; the other with the same numbers as the first. 30 checks: the sub rows,
+  their order, indent and text, none for a flat family, the toggle hiding and showing them; a sub row
+  zooming (path, ring, tree, relations box, highlight and `aria-current`), the path zooming out and
+  back to the family, the root row clearing it, the tree's chip (its own button, not inside the link,
+  none on a leaf); another family, a tab switch to a repo holding the same numbers, a search result
+  inside the zoomed subtree and a go-to outside it clearing the zoom; a go-to inside the zoom marking
+  and focusing the title when the target is the zoomed item, and unfolding the zoomed item's done
+  children when it is finished (check-it's lens and bug reviews, 2026-11-26); a refresh keeping it and one
+  that moved the item dropping it, also in the kept read's first frame with the walk held; the issue
+  view's path; Enter on a sub row and a chip reached by Tab, Space on a path button, focus on the
+  title after a chip; focus kept on a sub row, a chip and a path button through a refresh, on an
+  issue-view relations row when the item answers, and the fallback landing on a row's link; the
+  issue view's groups, counts and order shown while the item still loads, empty ones left out, no box
+  for an item with none, an unknown target as plain text, `in #R` only for another family, a target
+  in the same family opening its view and one elsewhere going to its tree; the family box's four
+  groups, From, the pair in both groups and a Blocked by row's go-to; `blocks #N` on a tree row. 50
+  mutations of the page each failed the check named for them, among them the two landing fixes
+  turned off one at a time and the shared relation row, bar, `left` and title helpers each broken;
+  one that dropped `in #R`'s test against the drawn item survived, since it differs only for a
+  target missing from the walk but under the same root in the full read, which no fixture holds (the test predates #50), and one that compared the target with any zoomed item, not only the drawn family's, is equivalent, since item numbers are unique within a repo; two runs that lost the browser's port
+  were run again. The page was opened from a file, so no CSP stood behind it; against the real
+  binary serving `tests/fixtures/tracker.json` with its CSP, the two sub rows listed, one zoomed with
+  its path, and a child's issue view showed `#1 › #2 ›`, with no console message. The harness is not committed: the repository runs no JavaScript (maintainer, #50).
 - #48's search and issue view were checked in headless Edge 158 over CDP at 1440×900, with a stubbed
   `fetch` that can hold any answer, against a tree of five families (one of 44 items with a fold, a
   finished one, numbers 12, 120, 123 and 1200, an XSS title) and item answers that include a body
